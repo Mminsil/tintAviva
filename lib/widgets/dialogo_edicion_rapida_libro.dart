@@ -36,7 +36,7 @@ class DialogoEdicionRapida extends StatefulWidget {
 class _DialogoEdicionState extends State<DialogoEdicionRapida> {
   late TextEditingController _controller;
   late ConfettiController _confettiController;
-   bool _yaMostroConfetti = false;
+  bool _yaMostroConfetti = false;
 
   @override
   void initState() {
@@ -46,7 +46,9 @@ class _DialogoEdicionState extends State<DialogoEdicionRapida> {
         ? widget.paginaActual.toString()
         : widget.progresoActual.toString();
     _controller = TextEditingController(text: valorInicial);
-    _confettiController = ConfettiController(duration: const Duration(seconds: 3));
+    _confettiController = ConfettiController(
+      duration: const Duration(seconds: 3),
+    );
   }
 
   @override
@@ -64,19 +66,28 @@ class _DialogoEdicionState extends State<DialogoEdicionRapida> {
       clipBehavior: Clip.none,
       children: [
         AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: Text(
             'Editar progreso',
-            style: TextStyle(color: AppColors.morado, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              color: AppColors.morado,
+              fontWeight: FontWeight.bold,
+              fontSize: 20,
+            ),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 esPapel
                     ? '¿Por qué página vas de "${widget.tituloLibro}"?'
                     : '¿Qué porcentaje llevas de "${widget.tituloLibro}"?',
-                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey[700], fontSize: 14),
+                textAlign: TextAlign.left,
               ),
               const SizedBox(height: 15),
               TextField(
@@ -84,23 +95,42 @@ class _DialogoEdicionState extends State<DialogoEdicionRapida> {
                 keyboardType: TextInputType.number,
                 maxLength: esPapel ? 5 : 3,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: InputDecoration(
-                  counterText: "",
-                  labelText: esPapel ? 'Página actual' : 'Porcentaje actual',
-                  suffixText: esPapel ? '/ ${widget.paginasTotales}' : '%',
-                ),
+                decoration:
+                    AppInputStyles.inputDecoration(
+                      esPapel ? 'Página actual' : 'Porcentaje actual',
+                    ).copyWith(
+                      counterText: "",
+                      suffixText: esPapel ? '/ ${widget.paginasTotales}' : '%',
+                      suffixStyle: TextStyle(
+                        color: Colors.grey[500],
+                        fontSize: 13,
+                      ),
+                    ),
               ),
             ],
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Cancelar'),
+              child: Text(
+                'Cancelar',
+                style: TextStyle(color: Colors.grey[600]),
+              ),
             ),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.naranja),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.naranja,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
               onPressed: _guardar,
-              child: const Text('Guardar', style: TextStyle(color: Colors.white)),
+              child: const Text('Guardar'),
             ),
           ],
         ),
@@ -108,7 +138,6 @@ class _DialogoEdicionState extends State<DialogoEdicionRapida> {
       ],
     );
   }
-
 
   /// Valida el input, calcula el progreso (si es papel) y retorna el resultado.
   ///
@@ -135,8 +164,7 @@ class _DialogoEdicionState extends State<DialogoEdicionRapida> {
       return;
     }
 
-    
-      final navigator = Navigator.of(context);
+    final navigator = Navigator.of(context);
 
     if (esPapel) {
       if (valorInput < 0 || valorInput > widget.paginasTotales) {
@@ -148,7 +176,6 @@ class _DialogoEdicionState extends State<DialogoEdicionRapida> {
         );
         return;
       }
-
 
       int porcentajeCalculado = 0;
       if (widget.paginasTotales > 0) {
@@ -167,13 +194,14 @@ class _DialogoEdicionState extends State<DialogoEdicionRapida> {
         if (mounted) {
           navigator.pop({
             'pagina': valorInput,
-            'progreso': porcentajeCalculado.clamp(0, 100).toInt(), // 👇 .toInt() CLAVE
+            'progreso': porcentajeCalculado
+                .clamp(0, 100)
+                .toInt(), // 👇 .toInt() CLAVE
           });
         }
       });
-      
+
       return;
-      
     } else {
       if (valorInput < 0 || valorInput > 100) {
         navigator.pop();
@@ -190,13 +218,10 @@ class _DialogoEdicionState extends State<DialogoEdicionRapida> {
       // 👇 DELAY PARA QUE SE VEA EL CONFETTI
       Future.delayed(const Duration(milliseconds: 300), () {
         if (mounted) {
-          navigator.pop({
-            'pagina': 0,
-            'progreso': valorInput,
-          });
+          navigator.pop({'pagina': 0, 'progreso': valorInput});
         }
       });
-      
+
       return;
     }
   }
@@ -218,4 +243,3 @@ class _DialogoEdicionState extends State<DialogoEdicionRapida> {
     }
   }
 }
-

@@ -337,7 +337,6 @@ class _EditarLibroPageState extends State<EditarLibroPage>
                           textCapitalization: TextCapitalization.sentences,
                           enableInteractiveSelection: true,
                           autocorrect: true,
-
                           controller: _bookCoverController,
                           decoration: AppInputStyles.inputDecoration(
                             "URL de la imagen",

@@ -1,0 +1,17 @@
+00:00 +0: loading D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/database_service_test.dart
+00:00 +0: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/database_service_test.dart: DatabaseService Tests Usuario debe tener email válido
+00:00 +1: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/database_service_test.dart: DatabaseService Tests Progreso debe estar en rango válido
+00:00 +2: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/database_service_test.dart: DatabaseService Tests Página actual no puede superar totalPages
+00:00 +3: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/database_service_test.dart: DatabaseService Tests Rating debe estar entre 0 y 5
+00:00 +4: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/database_service_test.dart: DatabaseService Tests Cita debe tener texto no vacío
+00:00 +5: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/database_service_test.dart: DatabaseService Tests Fecha fin debe ser posterior a fecha inicio
+00:00 +6: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/database_service_test.dart: DatabaseService Tests Título de libro no puede estar vacío
+00:00 +7: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/database_service_test.dart: DatabaseService Tests Autor no puede estar vacío
+00:00 +8: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/database_service_test.dart: DatabaseService Tests TotalPages debe ser mayor que 0
+00:00 +9: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/database_service_test.dart: DatabaseService Tests Mood debe ser emoji válido
+00:00 +10: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/integration_test.dart: Pruebas de Integración Flujo completo: Crear libro → Añadir progreso → Guardar cita
+00:00 +11: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/integration_test.dart: I2: Flujo completo clubs -> Crear club + Añadir meta + Comentar
+00:00 +12: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/integration_test.dart: I3: Flujo autenticación -> Registro + Login + Verificar datos usuario
+00:00 +13: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/integration_test.dart: I4: Flujo diario -> Crear entrada + Editar + Ver en lista
+00:00 +14: D:/DAW-DAM/DAM/Proyecto final DAM/tintaviva/test/integration_test.dart: I5: Flujo búsqueda -> Buscar libro + Añadir a biblioteca
+00:00 +15: All tests passed!

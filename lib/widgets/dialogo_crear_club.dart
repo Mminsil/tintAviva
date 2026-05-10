@@ -319,6 +319,8 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
       maxLines: maxLines,
       readOnly: onTap != null,
       keyboardType: keyboardType,
+      textCapitalization: TextCapitalization.sentences,
+      enableInteractiveSelection: true,
       onChanged: onChanged,
       onTap: onTap,
       decoration: _inputDecoration(label).copyWith(
