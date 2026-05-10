@@ -3,15 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:tintaviva/widgets/dialogo_registro.dart';
-import 'package:tintaviva/pages/home_page.dart'; // Asegúrate de importar HomePage
-import 'package:tintaviva/theme/app_styles.dart'; // Importa estilos
+import 'package:tintaviva/pages/home_page.dart';
+import 'package:tintaviva/theme/app_styles.dart';
 
-/// Pantalla de inicio de sesión y registro.
+/// Pantalla de autenticacion que maneja tres flujos:
+/// 1. Login con email/contraseña (signInWithEmailAndPassword)
+/// 2. Registro de nueva cuenta (DialogoRegistro + createUserWithEmailAndPassword)
+/// 3. Login con Google (GoogleSignIn + Firebase credential)
 ///
-/// Permite acceso mediante:
-/// 1. Email y contraseña (Firebase Auth).
-/// 2. Google Sign-In.
-/// 3. Registro de nuevo usuario (crea entrada en Firestore).
+/// Tras autenticacion exitosa, navega a HomePage y reemplaza la pila de navegacion.
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -54,12 +54,11 @@ class _LoginPageState extends State<LoginPage> {
                   style: TextStyle(
                     fontSize: 40,
                     fontWeight: FontWeight.bold,
-                    color: AppColors.morado, // Usa color global
+                    color: AppColors.morado,
                   ),
                 ),
                 const SizedBox(height: 50),
 
-                // Los TextFields toman el estilo del tema global.
                 TextField(
                   controller: _emailController,
                   keyboardType: TextInputType.emailAddress,
@@ -96,7 +95,10 @@ class _LoginPageState extends State<LoginPage> {
                 OutlinedButton.icon(
                   onPressed: _iniciarSesionConGoogle,
                   icon: const Icon(Icons.account_circle),
-                  label: const Text('Entrar con Google', style: TextStyle(fontWeight: FontWeight.bold), ),
+                  label: const Text(
+                    'Entrar con Google',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
                   style: OutlinedButton.styleFrom(
                     minimumSize: const Size(double.infinity, 50),
                     side: const BorderSide(color: AppColors.morado),
@@ -122,7 +124,9 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  /// Inicia sesión con email y contraseña.
+  /// Autentica con email y contraseña.
+  /// Si falla, captura FirebaseAuthException y muestra el mensaje de error.
+  /// Usa pushReplacement para que el usuario no pueda volver a login con el boton de retroceso.
   Future<void> _iniciarSesion() async {
     try {
       await FirebaseAuth.instance.signInWithEmailAndPassword(
@@ -130,7 +134,6 @@ class _LoginPageState extends State<LoginPage> {
         password: _passwordController.text.trim(),
       );
       if (!mounted) return;
-      // Navegación segura: reemplaza la pila para evitar volver al login con "Back".
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (context) => const HomePage()),
@@ -141,7 +144,13 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  /// Muestra el diálogo de registro y crea el usuario en Firebase y Firestore.
+  /// Abre DialogoRegistro y procesa la creacion de cuenta.
+  /// Flujo completo:
+  /// 1. Recoge nombre, email, password y avatar del dialog
+  /// 2. createUserWithEmailAndPassword en Firebase Auth
+  /// 3. updateDisplayName para establecer el nombre visible
+  /// 4. Crea documento en coleccion 'users' con estadisticas iniciales (inProgress:0, read:0, toRead:0)
+  /// 5. Navega a HomePage
   void _mostrarDialogoRegistro() async {
     final Map<String, String>? datos = await showDialog<Map<String, String>>(
       context: context,
@@ -151,7 +160,6 @@ class _LoginPageState extends State<LoginPage> {
     if (!mounted) return;
 
     try {
-      // 1. Crear usuario en Firebase Auth.
       UserCredential userCredential = await FirebaseAuth.instance
           .createUserWithEmailAndPassword(
             email: datos['email']!,
@@ -159,11 +167,8 @@ class _LoginPageState extends State<LoginPage> {
           );
       final user = userCredential.user;
 
-      // 2. Actualizar nombre visible en Auth.
       if (user != null) {
         await user.updateDisplayName(datos['name']);
-
-        // 3. Crear documento de usuario en Firestore con estadísticas iniciales.
         await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
           'uid': user.uid,
           'name': datos['name'],
@@ -184,7 +189,9 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  /// Lógica interna para el flujo de Google Sign-In.
+  /// Logica interna de Google Sign-In.
+  /// Devuelve UserCredential o null si el usuario cancela el flujo.
+  /// El clientId es el de la aplicacion de Google Cloud Console.
   Future<UserCredential?> signInWithGoogle() async {
     try {
       final GoogleSignIn googleSignIn = GoogleSignIn(
@@ -192,7 +199,7 @@ class _LoginPageState extends State<LoginPage> {
             '14443727035-sl8ccuo328v4o25qnpr80hmef75hu85f.apps.googleusercontent.com',
       );
       final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
-      if (googleUser == null) return null; // Usuario canceló el flujo.
+      if (googleUser == null) return null;
 
       final GoogleSignInAuthentication googleAuth =
           await googleUser.authentication;
@@ -207,7 +214,10 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  /// Inicia sesión con Google y sincroniza datos en Firestore.
+  /// Inicia sesion con Google y sincroniza con Firestore.
+  /// Diferencia clave con registro por email: usa set con merge:true.
+  /// Esto permite que si el usuario ya existe (ej: ya se registro antes con email),
+  /// solo se actualicen campos como photoURL sin sobrescribir stats ni registrationDate.
   Future<void> _iniciarSesionConGoogle() async {
     final userCredential = await signInWithGoogle();
     if (!mounted) return;
@@ -215,7 +225,6 @@ class _LoginPageState extends State<LoginPage> {
     if (userCredential != null) {
       final user = userCredential.user;
       if (user != null) {
-        // Usamos set con merge:true para crear el usuario si no existe o actualizar datos si ya existe.
         await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
           'uid': user.uid,
           'name': user.displayName ?? "Usuario",

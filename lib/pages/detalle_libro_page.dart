@@ -1,15 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:tintaviva/pages/editar_libro_page.dart';
 import 'package:tintaviva/theme/app_styles.dart';
 import 'package:tintaviva/utils/ui_helpers.dart';
+import 'package:tintaviva/widgets/seccion_citas_libro.dart';
+import 'package:tintaviva/widgets/seccion_diario.dart';
+import 'package:tintaviva/pages/editar_libro_page.dart';
 
-/// Pantalla de detalles de un libro específico en la biblioteca del usuario.
+/// Pantalla de detalle de un libro especifico en la biblioteca personal del usuario.
 ///
-/// Combina datos generales del libro (título, autor, portada) con datos personales
-/// (progreso, notas, rating, estantería). Permite editar la entrada.
-class DetalleLibroPage extends StatelessWidget {
-  // IDs necesarios para consultar las dos colecciones relacionadas.
+/// Combina dos streams de Firestore:
+/// 1. user_books/{userBookId} - Datos personalizados del usuario (progreso, rating, diario, personajes)
+/// 2. books/{bookId} - Datos generales del libro (titulo, autor, portada, sinopsis)
+///
+/// Muestra: portada, titulo, autor, rating, paginas, genero, barra de progreso,
+/// sinopsis, seccion de citas, lista de personajes, diario de lectura.
+/// El FAB permite editar el libro y navega a EditarLibroPage.
+class DetalleLibroPage extends StatefulWidget {
   final String userBookId;
   final String bookId;
 
@@ -20,12 +26,43 @@ class DetalleLibroPage extends StatelessWidget {
   });
 
   @override
+  State<DetalleLibroPage> createState() => _DetalleLibroPageState();
+}
+
+class _DetalleLibroPageState extends State<DetalleLibroPage> {
+  bool _mostrarTodoDiario = false;
+  bool _mostrarTodasCitas = false;
+
+  /// Convierte Timestamp de Firestore o DateTime a string formato dd/mm/yyyy.
+  String formatearFechaLarga(dynamic timestamp) {
+    if (timestamp == null) return '';
+    DateTime date = (timestamp is Timestamp) ? timestamp.toDate() : timestamp;
+    return "${date.day}/${date.month}/${date.year}";
+  }
+
+  /// Widget reutilizable para mostrar una metrica con icono.
+  /// Usado para rating, paginas y genero en fila horizontal.
+  Widget _infoItem(IconData icon, String label, String value) {
+    return Column(
+      children: [
+        Icon(icon, color: AppColors.morado, size: 24),
+        const SizedBox(height: 5),
+        Text(
+          value,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        Text(label, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+      ],
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // Stream 1: Datos personalizados del usuario para este libro.
+    // Stream 1: Datos del usuario para este libro (progreso, estado, personajes, diario)
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
           .collection('user_books')
-          .doc(userBookId)
+          .doc(widget.userBookId)
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.hasError) return Text("Error: ${snapshot.error}");
@@ -40,11 +77,11 @@ class DetalleLibroPage extends StatelessWidget {
 
         final userBookData = snapshot.data!.data() as Map<String, dynamic>;
 
-        // Stream 2: Datos generales del libro (para asegurar que tenemos la portada/sinopsis más reciente).
+        // Stream 2: Datos generales del libro (portada, sinopsis, genero, autor)
         return StreamBuilder<DocumentSnapshot>(
           stream: FirebaseFirestore.instance
               .collection('books')
-              .doc(bookId)
+              .doc(widget.bookId)
               .snapshots(),
           builder: (context, bookSnapshot) {
             if (bookSnapshot.hasError) {
@@ -61,7 +98,7 @@ class DetalleLibroPage extends StatelessWidget {
 
             final bookData = bookSnapshot.data!.data() as Map<String, dynamic>;
 
-            // Fusión de datos: Priorizamos los datos del usuario si existen, sino los generales.
+            // Fusion de datos: userBookData tiene prioridad sobre bookData para campos editables por usuario
             final String title =
                 userBookData['title'] ?? bookData['title'] ?? "Sin título";
             final String author =
@@ -74,21 +111,32 @@ class DetalleLibroPage extends StatelessWidget {
                 (userBookData['totalPages'] ?? bookData['pages'] ?? 0).toInt();
             final int currentPage = (userBookData['currentPage'] ?? 0).toInt();
             final String format = userBookData['format'] ?? 'Digital';
-
             final double rating = (userBookData['rating'] ?? 0.0).toDouble();
 
-            // Limpieza de strings para evitar vacíos en la UI.
             String genreRaw = bookData['genre'] ?? "";
             String synopsisRaw = bookData['synopsis'] ?? "";
+            final String notas = userBookData['notes'] ?? "";
+
             final String genre = genreRaw.trim().isEmpty
                 ? "Sin género"
                 : genreRaw;
             final String synopsis = synopsisRaw.trim().isEmpty
                 ? "Sin sinopsis disponible."
                 : synopsisRaw;
-
-            final String notes = userBookData['notes'] ?? "";
             final String shelf = userBookData['shelf'] ?? "Por leer";
+
+            // Extraccion de listas anidadas desde userBookData
+            final List<String> personajesList =
+                (userBookData['characters'] as List<dynamic>?)
+                    ?.map((e) => e.toString())
+                    .toList() ??
+                [];
+
+            final List<Map<String, dynamic>> diarioList =
+                (userBookData['readingJournal'] as List<dynamic>?)
+                    ?.map((e) => e as Map<String, dynamic>)
+                    .toList() ??
+                [];
 
             return Scaffold(
               extendBodyBehindAppBar: true,
@@ -100,11 +148,11 @@ class DetalleLibroPage extends StatelessWidget {
               body: SingleChildScrollView(
                 child: Column(
                   children: [
-                    // ENCABEZADO: Portada y título sobre fondo morado.
+                    // Encabezado con portada, titulo y autor
                     Container(
                       width: double.infinity,
                       decoration: const BoxDecoration(
-                        color: Color(0xFF5D3B82),
+                        color: AppColors.morado,
                         borderRadius: BorderRadius.only(
                           bottomLeft: Radius.circular(40),
                           bottomRight: Radius.circular(40),
@@ -149,8 +197,6 @@ class DetalleLibroPage extends StatelessWidget {
                                   : Image.asset(
                                       'assets/sin_portada.png',
                                       fit: BoxFit.cover,
-                                      width: double.infinity,
-                                      height: double.infinity,
                                     ),
                             ),
                           ),
@@ -162,6 +208,7 @@ class DetalleLibroPage extends StatelessWidget {
                               fontSize: 24,
                               fontWeight: FontWeight.bold,
                             ),
+                            textAlign: TextAlign.center,
                           ),
                           Text(
                             author,
@@ -171,8 +218,7 @@ class DetalleLibroPage extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 10),
-
-                          // Fecha de finalización si el libro está en la estantería "Leído".
+                          // Muestra fecha de finalizacion solo si el libro esta en estante 'Leido'
                           if (shelf == 'Leído' &&
                               userBookData['dateFinished'] != null)
                             Padding(
@@ -206,19 +252,19 @@ class DetalleLibroPage extends StatelessWidget {
                       ),
                     ),
 
-                    // DETALLES: Cuerpo de la página.
+                    // Cuerpo principal con toda la informacion detallada
                     Padding(
                       padding: const EdgeInsets.all(20.0),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Bloque de estadísticas rápidas.
+                          // Fila de metricas: Rating, Paginas, Genero
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceAround,
                             children: [
                               _infoItem(
                                 Icons.star,
-                                "Rating",
+                                "Puntuación",
                                 rating.toStringAsFixed(1),
                               ),
                               _infoItem(
@@ -229,10 +275,107 @@ class DetalleLibroPage extends StatelessWidget {
                               _infoItem(Icons.category, "Género", genre),
                             ],
                           ),
-                          const Divider(height: 40),
+                          const Divider(
+                            height: 40,
+                            thickness: 1.5,
+                            color: Colors.grey,
+                          ),
 
-                          Text(
-                            "Mi Progreso",
+                          Center(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 10,
+                              ),
+                              child: Text(
+                                "Información del libro",
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.morado,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ),
+                          ),
+
+                          const Text(
+                            "Sinopsis",
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                              color: AppColors.morado,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          TextoExpandible(
+                            texto: synopsis,
+                            maxLength: 500,
+                            style: TextStyle(
+                              color: Colors.grey[700],
+                              height: 1.5,
+                            ),
+                          ),
+                          const SizedBox(height: 30),
+
+                          //Notas
+                          if (notas.isNotEmpty) ...[
+                            const Text(
+                              "Notas",
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 18,
+                                color: AppColors.morado,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            TextoExpandible(
+                              texto: notas,
+                              maxLength: 250,
+                              style: TextStyle(
+                                color: Colors.grey[700],
+                                height: 1.5,
+                              ),
+                            ),
+                          ],
+
+                          // Seccion de personajes: permite agregar y eliminar personajes
+                          // La modificacion se hace directamente en Firestore desde el widget interno
+                          seccionPersonajes(
+                            context: context,
+                            userBookId: widget.userBookId,
+                            personajes: personajesList,
+                            onRefresh: () {
+                              setState(() {});
+                            },
+                          ),
+
+                          const Divider(
+                            height: 40,
+                            thickness: 1.5,
+                            color: Colors.grey,
+                          ),
+
+                          Center(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 10,
+                              ),
+                              child: Text(
+                                "Mi experiencia de lectura",
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.morado,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ),
+                          ),
+
+                          const Text(
+                            "Progreso",
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 18,
@@ -240,7 +383,6 @@ class DetalleLibroPage extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          // Widget personalizado para la barra de progreso.
                           WidgetBarraProgreso(
                             progress: progress,
                             currentPage: currentPage,
@@ -248,49 +390,43 @@ class DetalleLibroPage extends StatelessWidget {
                             format: format,
                             height: 10,
                           ),
-
                           const SizedBox(height: 30),
-                          const Text(
-                            "Sinopsis",
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 18,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            synopsis,
-                            style: TextStyle(
-                              color: Colors.grey[700],
-                              height: 1.5,
-                            ),
+
+                          // Seccion de citas destacadas del libro
+                          SeccionCitasLibro(
+                            tituloLibro: title,
+                            onAddQuote: () async {
+                              return await mostrarDialogoAgregarCitaGenerica(
+                                context,
+                                tituloLibro: title,
+                                autorLibro: author,
+                              );
+                            },
+                            mostrarTodo: _mostrarTodasCitas,
+                            onToggleVerMas: () {
+                              setState(() {
+                                _mostrarTodasCitas = !_mostrarTodasCitas;
+                              });
+                            },
                           ),
 
-                          const SizedBox(height: 30),
-                          const Text(
-                            "Mis Notas",
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 18,
-                            ),
+                          // Seccion del diario personal de lectura
+                          seccionDiario(
+                            context: context,
+                            userBookId: widget.userBookId,
+                            entradas: diarioList,
+                            onRefresh: () {
+                              setState(() {});
+                            },
+                            mostrarTodo: _mostrarTodoDiario,
+                            onToggleVerMas: () {
+                              setState(() {
+                                _mostrarTodoDiario = !_mostrarTodoDiario;
+                              });
+                            },
                           ),
-                          const SizedBox(height: 8),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(15),
-                            decoration: BoxDecoration(
-                              color: Colors.grey[100],
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.grey[300]!),
-                            ),
-                            child: Text(
-                              notes.isEmpty ? 'Sin notas personales.' : notes,
-                              style: const TextStyle(
-                                fontStyle: FontStyle.italic,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 100),
+
+                          const SizedBox(height: 80),
                         ],
                       ),
                     ),
@@ -298,11 +434,11 @@ class DetalleLibroPage extends StatelessWidget {
                 ),
               ),
 
-              // FAB para editar los datos del libro.
+              // Boton flotante para editar el libro
               floatingActionButton: FloatingActionButton(
                 backgroundColor: AppColors.morado,
                 onPressed: () {
-                  // Combinamos todos los datos para pasarlos a la pantalla de edición.
+                  // Fusiona userBookData y bookData para pasar todos los datos disponibles a la pantalla de edicion
                   Map<String, dynamic> todosLosDatos = {
                     ...userBookData,
                     ...bookData,
@@ -311,8 +447,8 @@ class DetalleLibroPage extends StatelessWidget {
                     context,
                     MaterialPageRoute(
                       builder: (_) => EditarLibroPage(
-                        userBookId: userBookId,
-                        bookId: bookId,
+                        userBookId: widget.userBookId,
+                        bookId: widget.bookId,
                         datosActuales: todosLosDatos,
                       ),
                     ),
@@ -324,21 +460,6 @@ class DetalleLibroPage extends StatelessWidget {
           },
         );
       },
-    );
-  }
-
-  /// Widget auxiliar para mostrar ítems de información (Rating, Páginas, Género).
-  Widget _infoItem(IconData icon, String label, String value) {
-    return Column(
-      children: [
-        Icon(icon, color: AppColors.morado, size: 28),
-        const SizedBox(height: 4),
-        Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-        Text(
-          value,
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-        ),
-      ],
     );
   }
 }

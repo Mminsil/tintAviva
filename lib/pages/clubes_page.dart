@@ -4,17 +4,15 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_speed_dial/flutter_speed_dial.dart';
 import 'package:tintaviva/pages/detalle_club_page.dart';
 import 'package:tintaviva/services/database.dart';
-import 'package:tintaviva/utils/ui_helpers.dart'; // Para mostrarDialogoConfirmacion
+import 'package:tintaviva/utils/ui_helpers.dart';
 import 'package:tintaviva/widgets/dialogo_unirse_club.dart';
 import 'package:tintaviva/widgets/dialogo_crear_club.dart';
-import 'package:tintaviva/theme/app_styles.dart'; // Importamos los estilos globales
+import 'package:tintaviva/theme/app_styles.dart';
 
-/// Pantalla principal que muestra los clubes de lectura a los que pertenece el usuario.
-///
-/// Esta página gestiona:
-/// 1. La visualización de clubes activos (en formato grid).
-/// 2. La visualización de clubes finalizados (en lista horizontal).
-/// 3. Las acciones de administración (crear, unirse, editar, finalizar, reactivar, eliminar) según el rol del usuario.
+/// Pantalla principal que muestra los clubes de lectura del usuario autenticado.
+/// Diferencia entre clubes activos (grid) y finalizados (lista horizontal).
+/// Las acciones de administracion (editar, finalizar, reactivar, eliminar) solo
+/// aparecen si el usuario es el owner del club.
 class ClubesPage extends StatefulWidget {
   const ClubesPage({super.key});
 
@@ -22,41 +20,41 @@ class ClubesPage extends StatefulWidget {
   State<ClubesPage> createState() => _ClubesPageState();
 }
 
-class _ClubesPageState extends State<ClubesPage> {
+class _ClubesPageState extends State<ClubesPage>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return Scaffold(
-      backgroundColor: AppColors.fondoClaro, // Fondo consistente con el tema
+      backgroundColor: AppColors.fondoClaro,
       body: SafeArea(child: _buildBody()),
       floatingActionButton: _buildSpeedDial(),
     );
   }
 
-  /// Construye el cuerpo principal de la pantalla.
-  ///
-  /// Lógica de flujo:
-  /// 1. Verifica si hay un usuario autenticado.
-  /// 2. Si no hay usuario, muestra mensaje de error.
-  /// 3. Si hay usuario, escucha en tiempo real los cambios en la colección 'clubs' de Firestore.
+  /// Construye el cuerpo principal.
+  /// Verifica autenticacion primero. Si hay usuario, hace stream de Firestore
+  /// filtrando clubs donde 'members' contiene su uid. Separa los documentos en
+  /// dos listas: activos (status != 'finalizado') y finalizados (status == 'finalizado').
+  /// Usa CustomScrollView para combinar SliverGrid (activos) y SliverList (finalizados).
   Widget _buildBody() {
     final user = FirebaseAuth.instance.currentUser;
 
-    // Protección básica: si no hay sesión iniciada, no intentamos cargar datos.
     if (user == null) {
       return const Center(
         child: Text("Por favor, inicia sesión para ver los clubes."),
       );
     }
 
-    // StreamBuilder: Se reconstruye automáticamente cuando cambian los datos en Firebase.
-    // Filtramos directamente en la consulta para traer solo los clubes donde el usuario es miembro.
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('clubs')
           .where('members', arrayContains: user.uid)
           .snapshots(),
       builder: (context, snapshot) {
-        // 1. Manejo de errores de conexión o permisos.
         if (snapshot.hasError) {
           return Center(
             child: Padding(
@@ -70,12 +68,10 @@ class _ClubesPageState extends State<ClubesPage> {
           );
         }
 
-        // 2. Estado de carga mientras Firebase recupera los datos.
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        // 3. Estado vacío: El usuario está logueado pero no pertenece a ningún club.
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
           return const Center(
             child: Padding(
@@ -89,62 +85,49 @@ class _ClubesPageState extends State<ClubesPage> {
           );
         }
 
-        // Procesamiento de datos: Separamos los clubes en 'activos' y 'finalizados'.
-        // Esto nos permite mostrarlos en secciones diferentes de la UI.
         final allDocs = snapshot.data!.docs;
-
-        // Filtramos clubes cuyo estado NO sea 'finalizado'.
         final activos = allDocs.where((doc) {
           final data = doc.data() as Map<String, dynamic>;
           return data['status'] != 'finalizado';
         }).toList();
-
-        // Filtramos clubes cuyo estado SÍ sea 'finalizado'.
         final finalizados = allDocs.where((doc) {
           final data = doc.data() as Map<String, dynamic>;
           return data['status'] == 'finalizado';
         }).toList();
 
-        // CustomScrollView permite combinar diferentes tipos de listas (Grid y List) en un solo scroll.
         return CustomScrollView(
-          physics:
-              const BouncingScrollPhysics(), // Efecto de rebote iOS/Android moderno
+          physics: const BouncingScrollPhysics(),
           slivers: [
-            // Título principal de la sección
             const SliverToBoxAdapter(
               child: Padding(
                 padding: EdgeInsets.fromLTRB(20, 20, 20, 10),
-                child: Text(
-                  "Mis Clubes de Lectura",
-                  style: AppTextStyles.sectionTitle, // Usamos estilo global
+                child: Center(
+                  child: Text(
+                    "Mis Clubes de Lectura",
+                    style: AppTextStyles.sectionTitle,
+                    textAlign: TextAlign.center,
+                  ),
                 ),
               ),
             ),
-
-            // SECCIÓN 1: GRID DE CLUBES ACTIVOS
-            // Usamos SliverGrid para mostrar las tarjetas en 2 columnas.
             SliverPadding(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
               sliver: SliverGrid(
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2, // 2 tarjetas por fila
-                  crossAxisSpacing: 15, // Espacio horizontal entre tarjetas
-                  mainAxisSpacing: 20, // Espacio vertical entre tarjetas
-                  childAspectRatio:
-                      0.65, // Relación ancho/alto para que las tarjetas sean altas
+                  crossAxisCount: 2,
+                  crossAxisSpacing: 15,
+                  mainAxisSpacing: 20,
+                  childAspectRatio: 0.65,
                 ),
                 delegate: SliverChildBuilderDelegate((context, index) {
                   final clubData =
                       activos[index].data() as Map<String, dynamic>;
                   final String idDoc = activos[index].id;
-                  // Determinamos si el usuario actual es el administrador (owner) para mostrar opciones extra.
                   final bool esAdmin = clubData['ownerId'] == user.uid;
                   return _tarjetaClub(context, clubData, idDoc, esAdmin);
                 }, childCount: activos.length),
               ),
             ),
-
-            // SECCIÓN 2: CLUBES FINALIZADOS (Solo si existen)
             if (finalizados.isNotEmpty) ...[
               const SliverToBoxAdapter(
                 child: Divider(height: 40, indent: 20, endIndent: 20),
@@ -162,10 +145,9 @@ class _ClubesPageState extends State<ClubesPage> {
                   ),
                 ),
               ),
-              // Lista horizontal para los clubes antiguos.
               SliverToBoxAdapter(
                 child: SizedBox(
-                  height: 240, // Altura fija para la lista horizontal
+                  height: 240,
                   child: ListView.builder(
                     scrollDirection: Axis.horizontal,
                     padding: const EdgeInsets.symmetric(horizontal: 15),
@@ -183,8 +165,6 @@ class _ClubesPageState extends State<ClubesPage> {
                 ),
               ),
             ],
-
-            // Espacio extra al final para que el FAB no tape el último elemento.
             const SliverToBoxAdapter(child: SizedBox(height: 100)),
           ],
         );
@@ -192,16 +172,13 @@ class _ClubesPageState extends State<ClubesPage> {
     );
   }
 
-  /// Construye el botón de acción flotante doble (SpeedDial).
-  ///
-  /// Permite dos acciones rápidas:
-  /// 1. Unirse a un club existente.
-  /// 2. Crear un nuevo club.
+  /// Boton flotante con dos acciones: 'Unirse' (abre DialogoUnirseClub) y
+  /// 'Crear club' (abre DialogoCrearClub). Usa flutter_speed_dial.
   Widget? _buildSpeedDial() {
     return SpeedDial(
       icon: Icons.add,
       activeIcon: Icons.close,
-      backgroundColor: AppColors.morado, // Color global
+      backgroundColor: AppColors.morado,
       foregroundColor: Colors.white,
       overlayColor: Colors.black,
       overlayOpacity: 0.4,
@@ -212,7 +189,6 @@ class _ClubesPageState extends State<ClubesPage> {
           label: 'Unirse',
           labelStyle: const TextStyle(fontWeight: FontWeight.w500),
           onTap: () async {
-            // Abre el diálogo modal para introducir código de invitación.
             await showDialog(
               context: context,
               builder: (context) => const DialogoUnirseClub(),
@@ -223,7 +199,6 @@ class _ClubesPageState extends State<ClubesPage> {
           child: const Icon(Icons.edit),
           label: 'Crear club',
           onTap: () {
-            // Abre el diálogo modal para configurar un nuevo club.
             showDialog(
               context: context,
               builder: (context) => const DialogoCrearClub(),
@@ -234,20 +209,19 @@ class _ClubesPageState extends State<ClubesPage> {
     );
   }
 
-  /// Widget que representa una tarjeta de club activo.
-  ///
-  /// Muestra imagen, nombre, contador de miembros y menú de administración si el usuario es owner.
+  /// Tarjeta para club activo.
+  /// Muestra imagen (clubImageUrl o bookCover como fallback), nombre, contador de miembros.
+  /// Si esAdmin es true, muestra PopupMenuButton con opciones: editar, finalizar, eliminar.
+  /// Al tocar la tarjeta navega a DetalleClubPage con el clubId.
   Widget _tarjetaClub(
     BuildContext context,
     Map<String, dynamic> data,
     String id,
     bool esAdmin,
   ) {
-    // Prioridad de imagen: primero la específica del club, si no, la portada del libro actual.
     final String imageUrl = data['clubImageUrl'] ?? data['bookCover'] ?? '';
 
     return GestureDetector(
-      // Al tocar la tarjeta, navegamos a la página de detalles del club.
       onTap: () => Navigator.push(
         context,
         MaterialPageRoute(builder: (context) => DetalleClubPage(clubId: id)),
@@ -258,7 +232,6 @@ class _ClubesPageState extends State<ClubesPage> {
           Expanded(
             child: Stack(
               children: [
-                // Contenedor de la imagen con bordes redondeados y sombra.
                 Container(
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(15),
@@ -278,15 +251,12 @@ class _ClubesPageState extends State<ClubesPage> {
                             fit: BoxFit.cover,
                             width: double.infinity,
                             height: double.infinity,
-                            // Si la imagen falla al cargar, mostramos un placeholder.
                             errorBuilder: (context, error, stackTrace) =>
                                 _buildPlaceholder(),
                           )
                         : _buildPlaceholder(),
                   ),
                 ),
-
-                // Menú de administración (solo visible para el creador del club).
                 if (esAdmin)
                   Positioned(
                     top: 8,
@@ -303,7 +273,6 @@ class _ClubesPageState extends State<ClubesPage> {
                         ),
                         tooltip: 'Opciones de admin',
                         onSelected: (value) {
-                          // Routing interno del menú: decide qué función llamar según la opción elegida.
                           if (value == 'edit_club') {
                             _mostrarDialogoEditarClub(context, id, data);
                           } else if (value == 'finish_club') {
@@ -323,7 +292,6 @@ class _ClubesPageState extends State<ClubesPage> {
                               ],
                             ),
                           ),
-                          // La opción de finalizar solo aparece si el club aún no está finalizado.
                           if (data['status'] != 'finalizado')
                             const PopupMenuItem(
                               value: 'finish_club',
@@ -364,7 +332,6 @@ class _ClubesPageState extends State<ClubesPage> {
             ),
           ),
           const SizedBox(height: 8),
-          // Nombre del club (truncateado si es muy largo).
           Text(
             data['name'] ?? 'Sin nombre',
             maxLines: 1,
@@ -375,7 +342,6 @@ class _ClubesPageState extends State<ClubesPage> {
               color: Colors.black87,
             ),
           ),
-          // Contador de miembros (ej: 3/7 miembros).
           Text(
             "${(data['members'] as List? ?? []).length}/${data['maxMembers'] ?? 7} miembros",
             style: TextStyle(fontSize: 12, color: Colors.grey[600]),
@@ -385,7 +351,9 @@ class _ClubesPageState extends State<ClubesPage> {
     );
   }
 
-  /// Widget que representa una tarjeta de club finalizado (más pequeña, lista horizontal).
+  /// Tarjeta para club finalizado. Similar a la activa pero formato mas pequeno
+  /// para lista horizontal. Prioriza bookCover sobre clubImageUrl.
+  /// Si es admin, las opciones del menu son: editar, reactivar, eliminar.
   Widget _tarjetaClubFinalizado(
     BuildContext context,
     Map<String, dynamic> data,
@@ -393,7 +361,6 @@ class _ClubesPageState extends State<ClubesPage> {
   ) {
     final currentUserId = FirebaseAuth.instance.currentUser?.uid;
     final bool esAdmin = data['ownerId'] == currentUserId;
-    // En clubes finalizados, priorizamos la portada del libro sobre la imagen del club.
     final String imageUrl = data['bookCover'] ?? data['clubImageUrl'] ?? '';
 
     return GestureDetector(
@@ -417,7 +384,6 @@ class _ClubesPageState extends State<ClubesPage> {
                     height: 180,
                     borderRadius: 12.0,
                   ),
-                  // Menú de admin también disponible en clubes finalizados.
                   if (esAdmin)
                     Positioned(
                       top: 5,
@@ -433,7 +399,6 @@ class _ClubesPageState extends State<ClubesPage> {
                             ],
                           ),
                           onSelected: (value) {
-                            // Routing interno para clubes finalizados.
                             if (value == 'edit_club') {
                               _mostrarDialogoEditarClub(context, id, data);
                             } else if (value == 'reactivate_club') {
@@ -452,8 +417,9 @@ class _ClubesPageState extends State<ClubesPage> {
                                   Text('Editar'),
                                 ],
                               ),
-                            ),
-                            // La opción de reactivar solo aparece si el club está finalizado.
+                            ), 
+                            
+                            // Solo muestra "Reactivar" si el club SÍ está finalizado
                             if (data['status'] == 'finalizado')
                               const PopupMenuItem(
                                 value: 'reactivate_club',
@@ -504,7 +470,6 @@ class _ClubesPageState extends State<ClubesPage> {
                 color: Colors.black87,
               ),
             ),
-            // Descripción breve solo en clubes finalizados para dar contexto histórico.
             if (data['description'] != null &&
                 data['description'].toString().isNotEmpty)
               Text(
@@ -519,9 +484,9 @@ class _ClubesPageState extends State<ClubesPage> {
     );
   }
 
-  /// Muestra un diálogo de confirmación antes de eliminar un club.
-  ///
-  /// Si el usuario confirma, llama al servicio de base de datos y muestra feedback.
+  /// Muestra dialogo de confirmacion y llama a DatabaseService.eliminarClub.
+  /// La eliminacion es permanente. Verifica context.mounted antes de mostrar
+  /// feedback para evitar errores si el widget se desmonta.
   void _confirmarEliminarClub(BuildContext context, String clubId) async {
     final bool? confirmar = await mostrarDialogoConfirmacion(
       context: context,
@@ -532,34 +497,25 @@ class _ClubesPageState extends State<ClubesPage> {
       colorAccion: Colors.red,
     );
 
-    // Solo procedemos si el usuario pulsó "Sí".
     if (confirmar == true) {
       try {
-        // 1. Eliminamos el club en Firebase (esto debería cascada borrar subcolecciones si está configurado así en Backend).
         await DatabaseService.eliminarClub(clubId);
-
-        // 2. Verificamos que el widget siga montado en el árbol antes de actualizar la UI.
-        // Esto evita errores si el usuario salió de la pantalla mientras se eliminaba.
         if (!context.mounted) return;
-
-        // 3. Mostramos feedback visual de éxito.
         mostrarSnackBar(
           context,
           "Club se eliminó permanentemente.",
           Colors.red,
         );
       } catch (e) {
-        // Manejo de errores si la eliminación falla (ej: problemas de red).
         if (!context.mounted) return;
-
         mostrarSnackBar(context, "Error al eliminar club: $e", Colors.red);
       }
     }
   }
 
-  /// Confirma y finaliza un club activo.
-  ///
-  /// Cambia el estado del club a 'finalizado' y procesa los libros en las bibliotecas personales.
+  /// Cambia el status del club a 'finalizado'.
+  /// Además procesa los libros de la meta actual y los asigna a la biblioteca
+  /// personal de cada miembro segun su progreso.
   void _confirmarFinalizarClub(BuildContext context, String clubId) async {
     final bool? confirmar = await mostrarDialogoConfirmacion(
       context: context,
@@ -572,8 +528,8 @@ class _ClubesPageState extends State<ClubesPage> {
 
     if (confirmar == true) {
       try {
-        // Llamada al servicio que gestiona la lógica de finalización en Firebase.
         await DatabaseService.finalizarClub(clubId);
+        // La lógica de pasar libros a biblioteca personal está en DatabaseService
         if (!context.mounted) return;
         mostrarSnackBar(
           context,
@@ -587,9 +543,8 @@ class _ClubesPageState extends State<ClubesPage> {
     }
   }
 
-  /// Confirma y reactiva un club finalizado.
-  ///
-  /// Vuelve a poner el club en estado activo y restablece la meta actual.
+  /// Cambia el status del club de 'finalizado' a 'activo'.
+  /// Restablece la meta actual para que los miembros puedan seguir leyendo.
   void _confirmarReactivarClub(BuildContext context, String clubId) async {
     final bool? confirmar = await mostrarDialogoConfirmacion(
       context: context,
@@ -602,7 +557,6 @@ class _ClubesPageState extends State<ClubesPage> {
 
     if (confirmar == true) {
       try {
-        // Llamada al servicio que cambia el estado a 'activo' en Firebase.
         await DatabaseService.reactivarClub(clubId);
         if (!context.mounted) return;
         mostrarSnackBar(
@@ -617,14 +571,15 @@ class _ClubesPageState extends State<ClubesPage> {
     }
   }
 
-  /// Widget placeholder que se muestra cuando no hay imagen de club o libro.
+  /// Placeholder visual cuando falla la carga de una imagen.
+  /// Muestra assets/imagen_app.jpg sobre fondo morado con opacidad 0.1.
   Widget _buildPlaceholder() {
     return Container(
       width: double.infinity,
       height: double.infinity,
-      color: AppColors.morado.withValues(alpha: 0.1), // Usamos color global
+      color: AppColors.morado.withValues(alpha: 0.1),
       child: Image.asset(
-        'assets/imagen_app.jpg', // Imagen por defecto
+        'assets/imagen_app.jpg',
         fit: BoxFit.cover,
         width: double.infinity,
         height: double.infinity,
@@ -632,13 +587,14 @@ class _ClubesPageState extends State<ClubesPage> {
     );
   }
 
-  /// Muestra un diálogo modal para editar el nombre y descripción del club.
+  /// Dialogo para editar nombre y descripcion de un club.
+  /// Pre-carga los valores actuales en los TextEditingController.
+  /// Al guardar, actualiza directamente en Firestore los campos 'name' y 'description'.
   void _mostrarDialogoEditarClub(
     BuildContext context,
     String clubId,
     Map<String, dynamic> currentData,
   ) {
-    // Inicializamos los controladores con los valores actuales del club.
     final TextEditingController nameController = TextEditingController(
       text: currentData['name'] ?? '',
     );
@@ -651,7 +607,7 @@ class _ClubesPageState extends State<ClubesPage> {
       builder: (dialogContext) => AlertDialog(
         title: const Text("Editar Club", style: AppTextStyles.dialogTitle),
         content: Column(
-          mainAxisSize: MainAxisSize.min, // Ajusta el alto al contenido
+          mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
               controller: nameController,
@@ -673,10 +629,8 @@ class _ClubesPageState extends State<ClubesPage> {
           ElevatedButton(
             style: AppButtonStyles.primaryElevatedButton,
             onPressed: () async {
-              // Validación básica: no permitir nombres vacíos.
               if (nameController.text.trim().isEmpty) return;
               try {
-                // Actualizamos solo los campos modificados en Firestore.
                 await FirebaseFirestore.instance
                     .collection('clubs')
                     .doc(clubId)
@@ -684,8 +638,6 @@ class _ClubesPageState extends State<ClubesPage> {
                       'name': nameController.text.trim(),
                       'description': descController.text.trim(),
                     });
-
-                // Cerramos el diálogo y mostramos confirmación.
                 if (dialogContext.mounted) Navigator.pop(dialogContext);
                 if (context.mounted) {
                   mostrarSnackBar(
@@ -695,7 +647,6 @@ class _ClubesPageState extends State<ClubesPage> {
                   );
                 }
               } catch (e) {
-                // En caso de error, cerramos diálogo y mostramos error.
                 if (dialogContext.mounted) Navigator.pop(dialogContext);
                 if (context.mounted) {
                   mostrarSnackBar(

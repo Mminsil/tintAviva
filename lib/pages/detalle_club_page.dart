@@ -8,10 +8,10 @@ import 'package:tintaviva/utils/ui_helpers.dart';
 import 'dart:async';
 import 'package:tintaviva/widgets/tarjeta_libro_progreso.dart';
 
-/// Página de detalles de un club de lectura específico.
-///
-/// Muestra información del club, el libro actual, el progreso de los miembros,
-/// permite gestionar metas (si eres admin) y participar en debates.
+/// Pantalla de detalle de un club de lectura.
+/// Muestra informacion del club, libro actual, progreso de miembros,
+/// gestion de metas (admin) y sistema de comentarios por meta.
+/// Los estados posibles son: club activo (con meta vigente) o club finalizado.
 class DetalleClubPage extends StatefulWidget {
   final String clubId;
   const DetalleClubPage({super.key, required this.clubId});
@@ -21,29 +21,21 @@ class DetalleClubPage extends StatefulWidget {
 }
 
 class _DetalleClubPageState extends State<DetalleClubPage> {
-  // Flag para evitar mostrar múltiples diálogos de formato simultáneamente.
   bool _mostrandoDialogoFormato = false;
-
-  // Colores definidos localmente para consistencia visual en esta pantalla.
-  final Color morado = const Color(0xFF5D3B82);
-  final Color naranja = const Color(0xFFFF6B35);
 
   @override
   void initState() {
     super.initState();
-    // Al entrar, verificamos si el usuario ha completado el libro para actualizar su estado en el club.
     _sincronizarMetaAlEntrar();
   }
 
-  /// Sincroniza el estado del usuario con la meta del club al cargar la página.
-  ///
-  /// Si el usuario tiene el libro marcado como "Leído" o con 100% de progreso en su biblioteca personal,
-  /// marca automáticamente la meta como alcanzada en el club si no lo estaba ya.
+  /// Al entrar a la pantalla, verifica si el usuario ya completo el libro
+  /// en su biblioteca personal. Si es asi, marca automaticamente goalReached en el club.
+  /// Esto sincroniza el estado entre la biblioteca personal y el club.
   Future<void> _sincronizarMetaAlEntrar() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
     try {
-      // Obtenemos los datos actuales del club para saber qué libro se está leyendo.
       final clubDoc = await FirebaseFirestore.instance
           .collection('clubs')
           .doc(widget.clubId)
@@ -56,7 +48,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
 
       if (bookId == null || bookId.isEmpty) return;
 
-      // Buscamos el registro personal del usuario para este libro específico.
       final userBookSnapshot = await FirebaseFirestore.instance
           .collection('user_books')
           .where('userId', isEqualTo: user.uid)
@@ -70,13 +61,11 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
       final double progress = (userBookData['progress'] ?? 0).toDouble();
       final String shelf = userBookData['shelf'] ?? 'Leyendo';
 
-      // Lógica de sincronización: Si está terminado personalmente, actualizar estado en el club.
       if (progress >= 100 || shelf == 'Leído') {
         final Map<String, dynamic>? myMemberInfo =
             members[user.uid] as Map<String, dynamic>?;
         final bool goalReached = myMemberInfo?['goalReached'] ?? false;
 
-        // Solo actualizamos si aún no se había marcado como logrado.
         if (!goalReached && mounted) {
           await DatabaseService.confirmarLlegadaMeta(widget.clubId, user.uid);
         }
@@ -88,7 +77,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
 
   @override
   Widget build(BuildContext context) {
-    // Stream principal: Escucha cambios en los datos generales del club (nombre, miembros, estado).
+    // Stream principal: datos del club (nombre, miembros, estado, meta actual, etc)
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
           .collection('clubs')
@@ -109,10 +98,8 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
           return const Scaffold(body: Center(child: Text("Error al cargar.")));
         }
 
-        // Extracción y preparación de datos del club.
         var data = snapshot.data!.data() as Map<String, dynamic>;
-        data['id'] =
-            snapshot.data!.id; // Añadimos el ID al mapa para facilitar acceso.
+        data['id'] = snapshot.data!.id;
 
         String nombreClub = data['name'] ?? "Sin nombre";
         String libro = data['book'] ?? "Libro no especificado";
@@ -127,7 +114,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
         Map<String, dynamic> clubMembers = data['club_members'] ?? {};
         List membersIds = data['members'] ?? [];
 
-        // Clasificación de miembros según su estado de lectura para el "semáforo".
+        // Clasificacion de miembros para el semaforo
         List confirmados = [], leyendo = [], inactivos = [];
         clubMembers.forEach((uid, info) {
           if (info['goalReached'] ?? false) {
@@ -139,17 +126,25 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
           }
         });
 
-        // Formateo de fecha límite si existe.
         String fechaFormateada = "";
         if (data['limitDate'] != null) {
           fechaFormateada = formatearFechaCorta(data['limitDate']);
         }
 
-        // Determinación de roles y estado personal del usuario actual.
         String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? "";
         bool esAdmin = ownerId == currentUserId;
+
         final datosUsuarioActual =
             clubMembers[currentUserId] as Map<String, dynamic>?;
+        final userNameActual =
+            datosUsuarioActual?['userName'] ??
+            FirebaseAuth.instance.currentUser?.displayName ??
+            "Usuario";
+        final userPhotoActual =
+            datosUsuarioActual?['userPhoto'] ??
+            FirebaseAuth.instance.currentUser?.photoURL ??
+            "";
+
         final goalReachedUsuario = datosUsuarioActual?['goalReached'] ?? false;
         final isReadingUsuario = datosUsuarioActual?['isReading'] ?? false;
 
@@ -158,7 +153,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
           appBar: AppBar(
             backgroundColor: Colors.white,
             elevation: 0,
-            foregroundColor: morado,
+            foregroundColor: AppColors.morado,
             leading: IconButton(
               icon: const Icon(Icons.arrow_back),
               onPressed: () => Navigator.pop(context),
@@ -169,20 +164,22 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // --- 1. IDENTIDAD DEL CLUB ---
+                // Cabecera: imagen circular, nombre, descripcion, resumen de miembros
                 Center(
                   child: Column(
                     children: [
                       Stack(
                         alignment: Alignment.center,
                         children: [
-                          // Imagen circular del club con borde decorativo.
                           Container(
                             width: 160,
                             height: 160,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              border: Border.all(color: morado, width: 3),
+                              border: Border.all(
+                                color: AppColors.morado,
+                                width: 3,
+                              ),
                             ),
                             child: ClipOval(
                               child: (clubImageUrl.isNotEmpty)
@@ -191,13 +188,13 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                                       fit: BoxFit.cover,
                                       width: double.infinity,
                                       height: double.infinity,
-                                      errorBuilder: (context, error, stackTrace) {
-                                        // Fallback a logo de app si la URL falla.
-                                        return Image.asset(
-                                          'assets/icono_app.png',
-                                          fit: BoxFit.cover,
-                                        );
-                                      },
+                                      errorBuilder:
+                                          (context, error, stackTrace) {
+                                            return Image.asset(
+                                              'assets/icono_app.png',
+                                              fit: BoxFit.cover,
+                                            );
+                                          },
                                     )
                                   : Image.asset(
                                       'assets/imagen_app.jpg',
@@ -207,7 +204,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                                     ),
                             ),
                           ),
-                          // Botón de edición de imagen solo para admins.
                           if (esAdmin)
                             Positioned(
                               bottom: 0,
@@ -226,7 +222,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                                     padding: const EdgeInsets.all(8.0),
                                     child: Icon(
                                       Icons.edit,
-                                      color: morado,
+                                      color: AppColors.morado,
                                       size: 20,
                                     ),
                                   ),
@@ -242,7 +238,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                         style: TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.bold,
-                          color: morado,
+                          color: AppColors.morado,
                         ),
                         textAlign: TextAlign.center,
                       ),
@@ -262,7 +258,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                           ),
                         ),
                       const SizedBox(height: 10),
-                      // Resumen de miembros con acción para ver lista completa.
                       _buildMiembrosResumen(
                         membersIds,
                         esAdmin,
@@ -279,24 +274,24 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                 ),
                 const SizedBox(height: 30),
 
-                // --- 2. TARJETA DEL LIBRO ---
+                // Tarjeta del libro actual con progreso
                 Row(
                   children: [
-                    Icon(Icons.menu_book, color: morado),
+                    Icon(Icons.menu_book, color: AppColors.morado),
                     const SizedBox(width: 8),
                     Text(
                       "Leyendo ahora",
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: morado,
+                        color: AppColors.morado,
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 10),
 
-                // Stream anidado: Escucha el progreso PERSONAL del usuario para este libro.
+                // Stream anidado: datos del libro en la biblioteca personal del usuario
                 StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
                       .collection('user_books')
@@ -310,7 +305,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                       )
                       .snapshots(),
                   builder: (context, snapshot) {
-                    // Caso: El usuario aún no ha añadido el libro a su biblioteca personal.
+                    // El usuario aun no ha agregado el libro a su biblioteca
                     if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                       return Card(
                         elevation: 2,
@@ -380,14 +375,12 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                         userBookDoc.data() as Map<String, dynamic>;
                     final String docId = userBookDoc.id;
 
-                    // --- LÓGICA DE DIÁLOGO DE FORMATO ---
-                    // Si el usuario no ha seleccionado formato (Papel/Digital), se lo preguntamos una vez.
+                    // Si el usuario no ha seleccionado formato (Papel/Digital), se pregunta una vez
                     final String formatoActual = userBookData['format'] ?? '';
 
                     if (formatoActual.isEmpty &&
                         !_mostrandoDialogoFormato &&
                         mounted) {
-                      // Usamos postFrameCallback para asegurar que el widget está construido antes de mostrar el diálogo.
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         setState(() => _mostrandoDialogoFormato = true);
                         _mostrarDialogoSeleccionarFormato(
@@ -397,33 +390,29 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                       });
                     }
 
-                    // Widget personalizado que muestra la barra de progreso y permite editarla.
                     return TarjetaLibroProgreso(
                       docId: docId,
                       libroData: userBookData,
-                      colorMorado: morado,
-                      colorNaranja: naranja,
                     );
                   },
                 ),
                 const SizedBox(height: 30),
 
-                // --- 3. PANEL DE ADMIN (CÓDIGO Y ACCIONES) ---
+                // Panel de admin: codigo de invitacion y acciones
                 if (esAdmin) ...[
                   if (!clubFinalizado)
                     Container(
                       margin: const EdgeInsets.symmetric(horizontal: 0),
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: morado.withValues(alpha: 0.05),
+                        color: AppColors.morado.withValues(alpha: 0.05),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: morado.withValues(alpha: 0.1),
+                          color: AppColors.morado.withValues(alpha: 0.1),
                         ),
                       ),
                       child: Column(
                         children: [
-                          // Sección para copiar el código de invitación.
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
@@ -442,7 +431,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                                     style: TextStyle(
                                       fontSize: 18,
                                       fontWeight: FontWeight.bold,
-                                      color: morado,
+                                      color: AppColors.morado,
                                     ),
                                   ),
                                 ],
@@ -463,13 +452,12 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                             ],
                           ),
                           const Divider(height: 25),
-                          // Botón para finalizar el club (solo visible si está activo).
                           ElevatedButton.icon(
                             onPressed: _confirmarFinalizarClub,
                             icon: const Icon(Icons.check_circle, size: 18),
                             label: const Text("Finalizar Club"),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: naranja,
+                              backgroundColor: AppColors.naranja,
                               foregroundColor: Colors.white,
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 20,
@@ -481,7 +469,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                       ),
                     ),
 
-                  // Acciones disponibles cuando el club ya está finalizado.
                   if (clubFinalizado) ...[
                     Container(
                       width: double.infinity,
@@ -521,8 +508,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                 ],
                 const SizedBox(height: 20),
 
-                // --- 3. META ACTUAL ---
-                // Renderizado condicional según si el club está finalizado o no.
+                // Meta actual (o banner finalizado)
                 clubFinalizado
                     ? _buildBannerFinalizado(data, libro)
                     : _buildSeccionMeta(
@@ -536,20 +522,18 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                       ),
                 const SizedBox(height: 25),
 
-                // --- 4. SEMÁFORO / PROGRESO GRUPAL ---
+                // Semaforo de progreso grupal (activo) o lista detallada (finalizado)
                 clubFinalizado
-                    ? _buildListaProgresoFinal(
-                        clubMembers,
-                      ) // Lista detallada al final.
+                    ? _buildListaProgresoFinal(clubMembers)
                     : _buildSemaforo(
                         confirmados,
                         leyendo,
                         inactivos,
                         clubMembers,
-                      ), // Vista resumida por estados.
+                      ),
                 const SizedBox(height: 25),
 
-                // --- 5. COMENTARIOS ---
+                // Seccion de comentarios (activa con input o archivada solo lectura)
                 clubFinalizado
                     ? _buildSeccionComentariosArchivado(
                         widget.clubId,
@@ -558,11 +542,14 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                     : _buildSeccionComentarios(
                         widget.clubId,
                         data['currentGoalId'] ?? "meta_inicial",
+                        userNameActual,
+                        userPhotoActual,
+                        currentUserId,
                       ),
 
                 const SizedBox(height: 30),
 
-                // --- FOOTER ACTIONS ---
+                // Boton de salida o eliminacion al final
                 clubFinalizado
                     ? _buildFooterHistorial()
                     : Center(
@@ -605,8 +592,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  // ... [Resto de métodos auxiliares documentados internamente] ...
-
+  /// Texto resumen de miembros que abre el dialog de lista completa.
   Widget _buildMiembrosResumen(
     List<dynamic> fotos,
     bool esAdmin,
@@ -621,17 +607,18 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
             "+${fotos.length} miembros",
             style: TextStyle(
               fontSize: 14,
-              color: morado,
+              color: AppColors.morado,
               decoration: TextDecoration.underline,
             ),
           ),
-          Icon(Icons.arrow_drop_down, color: morado),
+          Icon(Icons.arrow_drop_down, color: AppColors.morado),
         ],
       ),
     );
   }
 
-  /// Construye la tarjeta visual de la meta actual con gradientes dinámicos según el estado.
+  /// Tarjeta de meta actual con gradiente dinamico segun estado del usuario.
+  /// Los estados son: goalReached (verde), isReading (naranja), pendiente (rojo).
   Widget _buildSeccionMeta(
     String meta,
     String fechaLimite,
@@ -644,7 +631,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     final bool estaTerminado = goalReached;
     final bool estaLeyendo = isReading;
 
-    // Definición de colores e iconos según el estado del usuario.
     Color colorEstado = Colors.red;
     IconData iconoEstado = Icons.circle_outlined;
     if (estaTerminado) {
@@ -661,7 +647,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
         Container(
           width: double.infinity,
           decoration: BoxDecoration(
-            // Gradiente dinámico: Verde (logrado), Naranja (leyendo), Rojo (pendiente).
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
@@ -738,7 +723,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                   ],
                 ),
                 const SizedBox(height: 20),
-                // Caja blanca semitransparente para resaltar el texto de la meta.
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(20),
@@ -758,7 +742,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                   ),
                 ),
                 const SizedBox(height: 20),
-                // Botón de acción principal para el usuario (Empezar / Marcar leído).
                 _buildBotonEstadoMeta(
                   clubData['id'] ?? "",
                   currentUserId,
@@ -769,7 +752,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
             ),
           ),
         ),
-        // Botón exclusivo para Admins: Crear nueva meta.
         if (esAdmin)
           Padding(
             padding: const EdgeInsets.only(top: 15),
@@ -780,7 +762,9 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                 label: const Text("Nueva meta"),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppColors.morado,
-                  side: BorderSide(color: morado.withValues(alpha: 0.3)),
+                  side: BorderSide(
+                    color: AppColors.morado.withValues(alpha: 0.3),
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(20),
                   ),
@@ -800,7 +784,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Botón dinámico que cambia según si el usuario ha empezado o terminado la meta.
+  /// Boton de accion de la meta: cambiar estados (empezar, marcar llegada, deshabilitado si ya llego)
   Widget _buildBotonEstadoMeta(
     String clubId,
     String userId,
@@ -809,7 +793,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
   ) {
     if (goalReached) {
       return ElevatedButton(
-        onPressed: null, // Deshabilitado si ya se logró.
+        onPressed: null,
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.green,
           foregroundColor: Colors.white,
@@ -834,7 +818,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     }
     final Color naranjaBoton = const Color(0xFFFFB800);
     if (isReading) {
-      // Botón para confirmar que se ha llegado a la meta (página/capítulo indicado).
       return ElevatedButton(
         onPressed: () async {
           await DatabaseService.confirmarLlegadaMeta(clubId, userId);
@@ -861,7 +844,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
         ),
       );
     }
-    // Botón inicial para marcar que se ha empezado a leer la meta.
     return ElevatedButton(
       onPressed: () async {
         await DatabaseService.marcarMetaComoEmpezada(clubId, userId);
@@ -887,7 +869,8 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Muestra el "semáforo" de progreso grupal: Confirmados (Verde), Leyendo (Naranja), Inactivos (Rojo).
+  /// Semaforo de progreso grupal: tres filas con chips de nombres.
+  /// Verde: goalReached, Naranja: isReading, Rojo: inactivos.
   Widget _buildSemaforo(
     List confirmados,
     List leyendo,
@@ -1006,8 +989,14 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Sección de comentarios en tiempo real para la meta actual.
-  Widget _buildSeccionComentarios(String clubId, String? currentGoalId) {
+  /// Seccion de comentarios activa: muestra ultimos 3 comentarios y boton para abrir muro completo.
+  Widget _buildSeccionComentarios(
+    String clubId,
+    String? currentGoalId,
+    String userNameActual,
+    String userPhotoActual,
+    String currentUserId,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1032,7 +1021,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
           ),
           child: Stack(
             children: [
-              // Stream de los últimos 3 comentarios.
               StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
                     .collection('clubs')
@@ -1103,14 +1091,19 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                   );
                 },
               ),
-              // Botón flotante pequeño para abrir el muro completo de comentarios.
               Positioned(
                 bottom: 0,
                 right: 0,
                 child: FloatingActionButton.small(
-                  onPressed: () =>
-                      _abrirMuroCompletos(context, clubId, currentGoalId),
-                  backgroundColor: morado,
+                  onPressed: () => _abrirMuroCompletos(
+                    context,
+                    clubId,
+                    currentGoalId,
+                    userName: userNameActual,
+                    userPhoto: userPhotoActual,
+                    userId: currentUserId,
+                  ),
+                  backgroundColor: AppColors.morado,
                   elevation: 2,
                   child: const Icon(Icons.add, color: Colors.white),
                 ),
@@ -1126,8 +1119,8 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
             icon: const Icon(Icons.history, size: 18),
             label: const Text("Ver Historial de Metas"),
             style: OutlinedButton.styleFrom(
-              foregroundColor: morado,
-              side: BorderSide(color: morado.withValues(alpha: 0.3)),
+              foregroundColor: AppColors.morado,
+              side: BorderSide(color: AppColors.morado.withValues(alpha: 0.3)),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(20),
               ),
@@ -1142,12 +1135,15 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Diálogo modal que muestra todos los comentarios y permite escribir nuevos.
+  /// Dialog modal con lista completa de comentarios y campo para escribir nuevos.
   void _abrirMuroCompletos(
     BuildContext context,
     String clubId,
     String? goalId, {
     bool lecturaSolo = false,
+    required String userName,
+    required String userPhoto,
+    required String userId,
   }) {
     final String idReferencia = (goalId == null || goalId.isEmpty)
         ? "sin_meta"
@@ -1159,7 +1155,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
         backgroundColor: Colors.transparent,
         insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 500, maxHeight: 600),
+          constraints: const BoxConstraints(maxWidth: 500),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(30),
@@ -1181,14 +1177,20 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                 ),
                 const Divider(height: 1),
                 Flexible(
+                  flex: 1,
                   child: SizedBox(
                     height: MediaQuery.of(context).size.height * 0.4,
                     child: _buildListaComentariosCompleta(clubId, idReferencia),
                   ),
                 ),
-                // Input de comentario (oculto si es solo lectura histórica).
                 if (!lecturaSolo)
-                  _buildInputComentario(clubId, idReferencia)
+                  _buildInputComentario(
+                    clubId,
+                    idReferencia,
+                    userName,
+                    userPhoto,
+                    userId,
+                  )
                 else
                   Container(
                     width: double.infinity,
@@ -1210,7 +1212,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                     child: Text(
                       lecturaSolo ? "Volver al Historial" : "Cerrar",
                       style: TextStyle(
-                        color: morado,
+                        color: AppColors.morado,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -1224,15 +1226,18 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  Widget _buildInputComentario(String clubId, String goalId) {
+  /// Input de texto para enviar comentarios. Recibe datos de usuario por parametro.
+  Widget _buildInputComentario(
+    String clubId,
+    String goalId,
+    String userName,
+    String userPhoto,
+    String userId,
+  ) {
     final TextEditingController controller = TextEditingController();
+
     return Container(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + 15,
-        top: 15,
-        left: 15,
-        right: 15,
-      ),
+      padding: const EdgeInsets.only(top: 15, left: 15, right: 15, bottom: 15),
       decoration: BoxDecoration(
         color: Colors.white,
         border: Border(top: BorderSide(color: Colors.grey[200]!)),
@@ -1259,23 +1264,37 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
           ),
           const SizedBox(width: 10),
           CircleAvatar(
-            backgroundColor: morado,
+            backgroundColor: AppColors.morado,
             child: IconButton(
               icon: const Icon(Icons.send, color: Colors.white, size: 20),
               onPressed: () async {
-                if (controller.text.trim().isNotEmpty) {
+                final String texto = controller.text.trim();
+                if (texto.isEmpty) return;
+
+                try {
                   await DatabaseService.enviarComentario(
                     clubId: clubId,
                     goalId: goalId,
-                    texto: controller.text,
-                    userId: FirebaseAuth.instance.currentUser!.uid,
-                    userName:
-                        FirebaseAuth.instance.currentUser!.displayName ??
-                        "Usuario",
-                    userPhoto:
-                        FirebaseAuth.instance.currentUser!.photoURL ?? "",
+                    texto: texto,
+                    userId: userId,
+                    userName: userName,
+                    userPhoto: userPhoto,
                   );
+
                   controller.clear();
+
+                  if (mounted) {
+                    FocusScopeNode currentFocus = FocusScope.of(context);
+                    if (!currentFocus.hasPrimaryFocus &&
+                        currentFocus.focusedChild != null) {
+                      currentFocus.focusedChild!.unfocus();
+                    }
+                  }
+                } catch (e) {
+                  debugPrint("Error enviando comentario: $e");
+                  if (mounted) {
+                    mostrarSnackBar(context, "Error al enviar comentario.", Colors.red);
+                  }
                 }
               },
             ),
@@ -1285,6 +1304,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
+  /// Lista completa de comentarios para el muro.
   Widget _buildListaComentariosCompleta(String clubId, String goalId) {
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
@@ -1300,20 +1320,23 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
           return const Center(child: CircularProgressIndicator());
         }
         final docs = snapshot.data!.docs;
+
+        if (docs.isEmpty) {
+          return const Center(child: Text("No hay comentarios aún."));
+        }
+
         return ListView.builder(
+          shrinkWrap: false,
+          physics: const BouncingScrollPhysics(),
           padding: const EdgeInsets.all(20),
           itemCount: docs.length,
           itemBuilder: (context, index) {
             var data = docs[index].data() as Map<String, dynamic>;
             bool esMio =
                 data['userId'] == FirebaseAuth.instance.currentUser?.uid;
+
             return Padding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom + 10,
-                top: 10,
-                left: 15,
-                right: 15,
-              ),
+              padding: const EdgeInsets.only(bottom: 10),
               child: Row(
                 mainAxisAlignment: esMio
                     ? MainAxisAlignment.end
@@ -1331,7 +1354,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
                         color: esMio
-                            ? morado.withValues(alpha: 0.1)
+                            ? AppColors.morado.withValues(alpha: 0.1)
                             : Colors.grey[100],
                         borderRadius: BorderRadius.only(
                           topLeft: const Radius.circular(15),
@@ -1368,7 +1391,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Diálogo para ver el historial de metas pasadas y sus debates archivados.
+  /// Dialog para ver historial de metas pasadas y sus debates (solo lectura).
   void _mostrarHistorialMetas(
     BuildContext context,
     String clubId,
@@ -1401,7 +1424,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                   ),
                   child: Row(
                     children: [
-                      Icon(Icons.history, color: morado),
+                      Icon(Icons.history, color: AppColors.morado),
                       const SizedBox(width: 10),
                       const Text(
                         "Metas Anteriores",
@@ -1430,7 +1453,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                             child: CircularProgressIndicator(),
                           );
                         }
-                        // Filtramos la meta actual para mostrar solo las anteriores.
                         final metas = snapshot.data!.docs
                             .where((doc) => doc.id != currentGoalId)
                             .toList();
@@ -1464,6 +1486,9 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                                   clubId,
                                   metas[index].id,
                                   lecturaSolo: true,
+                                  userName: "",
+                                  userPhoto: "",
+                                  userId: "",
                                 );
                               },
                             );
@@ -1492,7 +1517,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Diálogo para que el Admin defina una nueva meta (páginas/capítulos y fecha límite).
+  /// Dialog para que el admin cree una nueva meta (nombre y fecha limite).
   void _mostrarDialogoNuevaMeta(
     BuildContext context,
     Map<String, dynamic> clubData,
@@ -1536,7 +1561,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                         style: TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.bold,
-                          color: morado,
+                          color: AppColors.morado,
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -1554,7 +1579,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                         padding: const EdgeInsets.symmetric(horizontal: 15),
                         child: TextField(
                           controller: metaController,
-                          cursorColor: morado,
+                          cursorColor: AppColors.morado,
                           decoration: InputDecoration(
                             icon: const Icon(
                               Icons.flag_circle_outlined,
@@ -1581,13 +1606,13 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                               return Theme(
                                 data: Theme.of(context).copyWith(
                                   colorScheme: ColorScheme.light(
-                                    primary: morado,
+                                    primary: AppColors.morado,
                                     onPrimary: Colors.white,
                                     onSurface: Colors.black,
                                   ),
                                   textButtonTheme: TextButtonThemeData(
                                     style: TextButton.styleFrom(
-                                      foregroundColor: morado,
+                                      foregroundColor: AppColors.morado,
                                     ),
                                   ),
                                 ),
@@ -1633,7 +1658,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                         height: 50,
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: morado,
+                            backgroundColor: AppColors.morado,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(15),
                             ),
@@ -1691,6 +1716,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
+  /// Banner mostrado cuando el club esta finalizado.
   Widget _buildBannerFinalizado(Map<String, dynamic> data, String libro) {
     String fechaFin = "Fecha desconocida";
     if (data['endDate'] != null) {
@@ -1749,10 +1775,10 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Lista detallada de progreso individual cuando el club ha finalizado.
+  /// Lista detallada de progreso individual para clubs finalizados.
+  /// Ordenada por progreso descendente. Incluye frases aleatorias.
   Widget _buildListaProgresoFinal(Map<String, dynamic> clubMembers) {
     List<MapEntry<String, dynamic>> miembrosList = clubMembers.entries.toList();
-    // Ordenamos por progreso descendente.
     miembrosList.sort((a, b) {
       double progA = (a.value['progress'] ?? 0).toDouble();
       double progB = (b.value['progress'] ?? 0).toDouble();
@@ -1783,7 +1809,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
               );
               bool esAdmin = info['role'] == 'admin';
 
-              // Determinación de iconos y frases motivacionales según porcentaje.
               IconData iconoEstado;
               Color colorEstado;
               String textoPorcentaje;
@@ -1865,7 +1890,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  // Frases aleatorias para gamificar el progreso final.
+  // Frases aleatorias para gamificar el resumen final
   String _obtenerFraseFinalizada() {
     const frases = [
       "Libro devorado!",
@@ -1893,6 +1918,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     return frases[DateTime.now().millisecond % frases.length];
   }
 
+  /// Version archivada de la seccion de comentarios (solo lectura).
   Widget _buildSeccionComentariosArchivado(
     String clubId,
     String currentGoalId,
@@ -1953,8 +1979,8 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
             icon: const Icon(Icons.history, size: 18),
             label: const Text("Ver Historial de Comentarios"),
             style: OutlinedButton.styleFrom(
-              foregroundColor: morado,
-              side: BorderSide(color: morado.withValues(alpha: 0.3)),
+              foregroundColor: AppColors.morado,
+              side: BorderSide(color: AppColors.morado.withValues(alpha: 0.3)),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(20),
               ),
@@ -1975,7 +2001,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
             icon: const Icon(Icons.arrow_back),
             label: const Text("Volver a mis clubes"),
             style: ElevatedButton.styleFrom(
-              backgroundColor: morado,
+              backgroundColor: AppColors.morado,
               padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
             ),
           ),
@@ -2145,7 +2171,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
             ),
             const SizedBox(height: 10),
             const Text(
-              "Nota: Esta imagen se verá en la lista de clubs, no aquí.",
+              "Nota: Esta imagen se vera en la lista de clubs, no aqui.",
               style: TextStyle(fontSize: 11, color: Colors.grey),
             ),
           ],
@@ -2177,7 +2203,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                 }
               }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: morado),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.morado),
             child: const Text("Guardar", style: TextStyle(color: Colors.white)),
           ),
         ],
@@ -2371,7 +2397,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Genera una frase divertida basada en las estadísticas de lectura del usuario.
+  /// Genera una frase basada en las estadisticas de lectura del miembro.
   String _generarFraseGossip(Map<String, dynamic> stats) {
     int leidos = stats['booksRead'] ?? 0;
     int leyendo = stats['currentlyReading'] ?? 0;
@@ -2395,11 +2421,12 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     return frases.join(" ");
   }
 
-  /// Diálogo obligatorio para seleccionar formato (Papel/Digital) si no se ha hecho antes.
+  /// Dialogo inicial obligatorio cuando el usuario no ha seleccionado formato.
+  /// Se muestra una sola vez al entrar al detalle del club si format esta vacio.
   void _mostrarDialogoSeleccionarFormato(String userBookId, int totalPaginas) {
     showDialog(
       context: context,
-      barrierDismissible: false, // No se puede cerrar tocando fuera
+      barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
         title: const Text("¿Cómo vas a leer este libro?"),
         content: const Text(

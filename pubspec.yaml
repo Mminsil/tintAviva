@@ -54,6 +54,10 @@ dependencies:
   image_picker: ^0.8.7
   # Para generar íconos de aplicación personalizados a partir de una imagen, facilitando la personalización de la apariencia de la aplicación en diferentes plataformas.
   flutter_launcher_icons: ^0.13.1
+  # 
+  http: ^1.6.0
+  confetti: ^0.8.0
+  flutter_dotenv: ^6.0.1
 
 dev_dependencies:
   flutter_test:
@@ -83,6 +87,8 @@ flutter:
     - assets/sin_portada.png
     - assets/icono_app.png
     - assets/imagen_app.jpg
+    - .env
+  
 
 flutter_launcher_icons:
   android: "launcher_icon"
