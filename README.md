@@ -93,7 +93,7 @@ flutter pub get
 # - Habilita Authentication (Email/Google) y Firestore
 
 # 4. Ejecuta en modo debug
-flutter run
+-d chrome --web-port 8080
 
 # 5. O genera APK de producción
 flutter build apk --release
