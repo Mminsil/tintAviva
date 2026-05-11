@@ -68,6 +68,8 @@ TintAviva es una aplicación móvil diseñada para lectores empedernidos que des
 
 ## 🚀 Instalación
 
+
+
 ### Opción 1: Descargar APK (Recomendado)
 1. Ve a la sección **[Releases](https://github.com/Mminsil/tintAviva/releases)** de este repositorio.
 2. Descarga `app-release.apk` de la última versión (`v1.0.0`).
@@ -97,7 +99,7 @@ flutter pub get
 
 # 5. O genera APK de producción
 flutter build apk --release
-
+```
 
 👩‍💻 Autora
 Mariana Mincarelli Silvero
