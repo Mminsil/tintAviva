@@ -97,3 +97,10 @@ flutter pub get
 
 # 5. O genera APK de producción
 flutter build apk --release
+
+
+👩‍💻 Autora
+Mariana Mincarelli Silvero
+📧 Contacto: [maryminca@gmailcom]
+🔗 GitHub: @Mminsil
+Proyecto Final DAM | Curso 2025-2026
