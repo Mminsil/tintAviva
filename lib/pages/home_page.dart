@@ -1,20 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:tintaviva/pages/clubes_page.dart';
-import 'package:tintaviva/pages/perfil_page.dart';
+import 'package:tintaviva/pages/diario_page.dart';
 import 'package:tintaviva/pages/mi_biblioteca_page.dart';
+import 'package:tintaviva/pages/perfil_page.dart';
 import 'package:tintaviva/theme/app_styles.dart';
 
 /// Página principal de navegación de la aplicación.
 ///
-/// Funciona como contenedor de las tres secciones principales:
-/// 1. Mi Biblioteca (gestión de libros personales).
-/// 2. Clubes (lectura social y metas grupales).
-/// 3. Perfil (estadísticas y configuración de usuario).
+/// Funciona como contenedor de las secciones principales:
+/// 1. `MiBibliotecaPage` (gestión de libros personales)
+/// 2. `DiarioPage` (reflexiones y citas)
+/// 3. `ClubesPage` (lectura social y metas grupales)
+/// 4. `PerfilPage` (estadísticas y configuración)
 ///
 /// Características de navegación:
-/// - Permite cambiar de pestaña tocando los iconos inferiores.
-/// - Permite deslizar horizontalmente (swipe) para navegar entre secciones.
-/// - Mantiene el estado de cada página al cambiar de pestaña (gracias a PageView).
+/// - Cambio de pestaña por toque en `BottomNavigationBar`
+/// - Navegación por swipe horizontal con `PageView`
+/// - Preservación de estado por página gracias a `PageController`
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -23,77 +25,120 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  // Índice de la pestaña actualmente seleccionada (0: Biblioteca, 1: Clubes, 2: Perfil).
+  /// Índice de la pestaña actualmente seleccionada.
+  ///
+  /// Valores: `0` = Biblioteca, `1` = Diario, `2` = Clubes, `3` = Perfil
   int _selectedIndex = 0;
 
-  // Controlador para gestionar el PageView: permite animaciones programáticas y detectar swipes.
+  /// Controlador para gestionar el `PageView`.
+  ///
+  /// Permite:
+  /// - Animaciones programáticas con `animateToPage()`
+  /// - Detectar cambios por swipe del usuario
   final PageController _pageController = PageController();
 
-  // Lista de widgets que representan cada sección de la app.
-  // Se mantienen en memoria mientras el HomePage esté activo, preservando su estado (scroll, inputs, etc.).
-  final List<Widget> _paginas = [
-    const MiBibliotecaPage(),
-    const ClubesPage(),
-    const PerfilPage(),
+  /// Lista de widgets que representan cada sección de la app.
+  ///
+  /// Se mantienen en memoria mientras `HomePage` esté activo,
+  /// preservando su estado interno (scroll, inputs, etc.).
+  final List<Widget> _paginas = const [
+    MiBibliotecaPage(),
+    DiarioPage(),
+    ClubesPage(),
+    PerfilPage(),
   ];
 
   @override
   void dispose() {
-    // IMPORTANTE: Liberamos el controlador para evitar fugas de memoria cuando se destruye este widget.
+    // Liberamos el controlador para evitar fugas de memoria.
     _pageController.dispose();
     super.dispose();
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // BUILD PRINCIPAL 
+  // ─────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // El cuerpo usa PageView para permitir navegación por swipe (deslizamiento horizontal).
-      body: PageView(
-        controller: _pageController,
-        // BouncingScrollPhysics da un efecto de "rebote" al final del scroll, más natural en móviles.
-        physics: const BouncingScrollPhysics(),
+      body: _buildPageView(),
+      bottomNavigationBar: _buildBottomNav(),
+    );
+  }
 
-        // Cuando el usuario desliza con el dedo, actualizamos el índice seleccionado para sincronizar la barra inferior.
-        onPageChanged: (index) {
-          setState(() => _selectedIndex = index);
-        },
+  // ─────────────────────────────────────────────────────────────
+  // WIDGETS AUXILIARES DE UI (EXTRAÍDOS DEL BUILD)
+  // ─────────────────────────────────────────────────────────────
 
-        // Las páginas que se mostrarán en el carrusel.
-        children: _paginas,
+  /// Construye el `PageView` principal con navegación por swipe.
+  ///
+  /// - Usa `_pageController` para sincronizar con la barra inferior
+  /// - `BouncingScrollPhysics` da efecto de rebote al final del scroll
+  /// - `onPageChanged` actualiza `_selectedIndex` al deslizar
+  Widget _buildPageView() {
+    return PageView(
+      controller: _pageController,
+      physics: const BouncingScrollPhysics(),
+      onPageChanged: _onPageChanged,
+      children: _paginas,
+    );
+  }
+
+  /// Construye la barra de navegación inferior fija.
+  ///
+  /// - `type: fixed` evita animaciones de iconos/texto al cambiar
+  /// - `onTap` navega con animación suave vía `_pageController`
+  Widget _buildBottomNav() {
+    return BottomNavigationBar(
+      currentIndex: _selectedIndex,
+      selectedItemColor: AppColors.naranja,
+      unselectedItemColor: Colors.grey,
+      type: BottomNavigationBarType.fixed,
+      onTap: _onNavItemTapped,
+      items: _buildNavItems(),
+    );
+  }
+
+  /// Construye la lista de ítems para `BottomNavigationBar`.
+  List<BottomNavigationBarItem> _buildNavItems() {
+    return const [
+      BottomNavigationBarItem(
+        icon: Icon(Icons.library_books),
+        label: 'Biblioteca',
       ),
+      BottomNavigationBarItem(icon: Icon(Icons.edit_note), label: 'Diario'),
+      BottomNavigationBarItem(icon: Icon(Icons.groups), label: 'Clubes'),
+      BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Perfil'),
+    ];
+  }
 
-      // Barra de navegación inferior fija.
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        selectedItemColor: AppColors.naranja,
-        unselectedItemColor: Colors.grey,
-        // 'fixed' asegura que los iconos y textos no se muevan/animen al cambiar de pestaña.
-        type: BottomNavigationBarType.fixed,
+  // ─────────────────────────────────────────────────────────────
+  // HANDLERS DE EVENTOS (LÓGICA DE NAVEGACIÓN)
+  // ─────────────────────────────────────────────────────────────
 
-        // Cuando el usuario toca un icono, navegamos a esa página con animación suave.
-        onTap: (index) {
-          setState(() => _selectedIndex = index);
+  /// Maneja el cambio de página por swipe del usuario.
+  ///
+  /// Actualiza `_selectedIndex` para sincronizar la barra inferior.
+  void _onPageChanged(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+  }
 
-          // Animación programática: movemos el PageView a la página seleccionada.
-          _pageController.animateToPage(
-            index,
-            duration: const Duration(
-              milliseconds: 300,
-            ), // Duración de la animación (0.3s)
-            curve:
-                Curves.easeInOut, // Curva de aceleración/desaceleración suave
-          );
-        },
-
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.library_books),
-            label: 'Biblioteca',
-          ),
-          BottomNavigationBarItem(icon: Icon(Icons.groups), label: 'Clubes'),
-          BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Perfil'),
-        ],
-      ),
+  /// Maneja el toque en un ítem de la barra de navegación.
+  ///
+  /// Navega a la página seleccionada con animación suave:
+  /// - `duration: 300ms` para transición fluida
+  /// - `curve: easeInOut` para aceleración/desaceleración natural
+  void _onNavItemTapped(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+    _pageController.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
     );
   }
 }

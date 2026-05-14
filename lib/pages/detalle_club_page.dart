@@ -1,17 +1,23 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:tintaviva/services/database.dart';
 import 'package:flutter/services.dart';
+import 'package:tintaviva/services/database.dart';
 import 'package:tintaviva/theme/app_styles.dart';
-import 'package:tintaviva/utils/ui_helpers.dart';
-import 'dart:async';
+import 'package:tintaviva/utils/dialogos_helpers.dart';
 import 'package:tintaviva/widgets/tarjeta_libro_progreso.dart';
 
 /// Pantalla de detalle de un club de lectura.
-/// Muestra informacion del club, libro actual, progreso de miembros,
-/// gestion de metas (admin) y sistema de comentarios por meta.
-/// Los estados posibles son: club activo (con meta vigente) o club finalizado.
+///
+/// Muestra:
+/// - Información del club (imagen, nombre, descripción, miembros)
+/// - Libro actual con progreso personal (`TarjetaLibroProgreso`)
+/// - Gestión de metas (solo admin): crear, finalizar, reactivar
+/// - Sistema de comentarios por meta (`club_goals/comments`)
+/// - Semáforo de progreso grupal o lista finalizada
+///
+/// Estados posibles: `'activo'` (con meta vigente) | `'finalizado'` (solo lectura)
 class DetalleClubPage extends StatefulWidget {
   final String clubId;
   const DetalleClubPage({super.key, required this.clubId});
@@ -21,6 +27,9 @@ class DetalleClubPage extends StatefulWidget {
 }
 
 class _DetalleClubPageState extends State<DetalleClubPage> {
+  /// Controla si ya se mostró el diálogo de selección de formato.
+  ///
+  /// Evita mostrar el diálogo múltiples veces al reconstruir el widget.
   bool _mostrandoDialogoFormato = false;
 
   @override
@@ -29,24 +38,599 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     _sincronizarMetaAlEntrar();
   }
 
-  /// Al entrar a la pantalla, verifica si el usuario ya completo el libro
-  /// en su biblioteca personal. Si es asi, marca automaticamente goalReached en el club.
-  /// Esto sincroniza el estado entre la biblioteca personal y el club.
+  // ─────────────────────────────────────────────────────────────
+  // BUILD PRINCIPAL (ÍNDICE LEGIBLE)
+  // ─────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.grey[50],
+      appBar: _buildAppBar(),
+      body: _buildBody(),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // WIDGETS AUXILIARES DE UI (EXTRAÍDOS DEL BUILD)
+  // ─────────────────────────────────────────────────────────────
+
+  /// Construye la AppBar con botón de retroceso y estilo personalizado.
+  AppBar _buildAppBar() {
+    return AppBar(
+      backgroundColor: Colors.white,
+      elevation: 0,
+      foregroundColor: AppColors.morado,
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back),
+        onPressed: () => Navigator.pop(context),
+      ),
+    );
+  }
+
+  /// Construye el cuerpo principal con `StreamBuilder` para datos del club.
+  ///
+  /// Escucha cambios en tiempo real en `clubs/{clubId}` y renderiza:
+  /// - Estados de carga/error
+  /// - Contenido principal con header, libro, metas, semáforo y comentarios
+  Widget _buildBody() {
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('clubs')
+          .doc(widget.clubId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (!snapshot.hasData || !snapshot.data!.exists) {
+          return const Center(child: Text("El club no existe."));
+        }
+        if (snapshot.hasError) {
+          return const Center(child: Text("Error al cargar."));
+        }
+
+        final data = snapshot.data!.data() as Map<String, dynamic>;
+        data['id'] = snapshot.data!.id;
+        return _buildClubContent(data);
+      },
+    );
+  }
+
+  /// Construye el contenido principal una vez cargados los datos del club.
+  ///
+  /// Extrae variables locales, determina estado (admin/finalizado) y construye la UI.
+  Widget _buildClubContent(Map<String, dynamic> data) {
+    final String nombreClub = data['name'] ?? "Sin nombre";
+    final String libro = data['book'] ?? "Libro no especificado";
+    final String autor = data['bookAuthor'] ?? "Autor desconocido";
+    final String descripcion = data['description'] ?? "";
+    final String ownerId = data['ownerId'] ?? "";
+    final String clubBookId = data['bookId'] ?? "";
+    final String clubImageUrl = data['clubImageUrl'] ?? "";
+    final bool clubFinalizado = data['status'] == 'finalizado';
+    final String metaActual = data['currentGoalName'] ?? "Meta no definida";
+    final Map<String, dynamic> clubMembers = data['club_members'] ?? {};
+    final List<dynamic> membersIds = data['members'] ?? [];
+    final String fechaFormateada = data['limitDate'] != null
+        ? formatearFechaCorta(data['limitDate'])
+        : "";
+    final String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? "";
+    final bool esAdmin = ownerId == currentUserId;
+
+    // Datos del usuario actual en el club
+    final datosUsuarioActual =
+        clubMembers[currentUserId] as Map<String, dynamic>?;
+    final userNameActual =
+        datosUsuarioActual?['userName'] ??
+        FirebaseAuth.instance.currentUser?.displayName ??
+        "Usuario";
+    final userPhotoActual =
+        datosUsuarioActual?['userPhoto'] ??
+        FirebaseAuth.instance.currentUser?.photoURL ??
+        "";
+    final goalReachedUsuario = datosUsuarioActual?['goalReached'] ?? false;
+    final isReadingUsuario = datosUsuarioActual?['isReading'] ?? false;
+
+    // Clasificación de miembros para el semáforo
+    final List<dynamic> confirmados = [], leyendo = [], inactivos = [];
+    clubMembers.forEach((uid, info) {
+      if (info['goalReached'] ?? false) {
+        confirmados.add(uid);
+      } else if (info['isReading'] ?? false) {
+        leyendo.add(uid);
+      } else {
+        inactivos.add(uid);
+      }
+    });
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildClubHeader(
+            nombreClub,
+            descripcion,
+            clubImageUrl,
+            esAdmin,
+            membersIds,
+            clubMembers,
+            currentUserId,
+          ),
+          const SizedBox(height: 30),
+          _buildCurrentBookSection(libro, autor, clubBookId),
+          const SizedBox(height: 30),
+          if (esAdmin) _buildAdminPanel(data, clubFinalizado),
+          const SizedBox(height: 20),
+          clubFinalizado
+              ? _buildBannerFinalizado(data, libro)
+              : _buildSeccionMeta(
+                  metaActual,
+                  fechaFormateada,
+                  esAdmin,
+                  data,
+                  currentUserId,
+                  goalReachedUsuario,
+                  isReadingUsuario,
+                ),
+          const SizedBox(height: 25),
+          clubFinalizado
+              ? _buildListaProgresoFinal(clubMembers)
+              : _buildSemaforo(confirmados, leyendo, inactivos, clubMembers),
+          const SizedBox(height: 25),
+          clubFinalizado
+              ? _buildSeccionComentariosArchivado(
+                  widget.clubId,
+                  data['currentGoalId'] ?? "meta_inicial",
+                )
+              : _buildSeccionComentarios(
+                  widget.clubId,
+                  data['currentGoalId'] ?? "meta_inicial",
+                  userNameActual,
+                  userPhotoActual,
+                  currentUserId,
+                ),
+          const SizedBox(height: 30),
+          clubFinalizado ? _buildFooterHistorial() : _buildExitButton(esAdmin),
+        ],
+      ),
+    );
+  }
+
+  /// Construye el header del club: imagen, nombre, descripción y resumen de miembros.
+  Widget _buildClubHeader(
+    String nombreClub,
+    String descripcion,
+    String clubImageUrl,
+    bool esAdmin,
+    List<dynamic> membersIds,
+    Map<String, dynamic> clubMembers,
+    String currentUserId,
+  ) {
+    return Center(
+      child: Column(
+        children: [
+          _buildClubImage(clubImageUrl, esAdmin),
+          const SizedBox(height: 15),
+          Text(
+            nombreClub,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: AppColors.morado,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          if (descripcion.isNotEmpty && descripcion != "Sin descripción")
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
+              child: Text(
+                descripcion,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey[700]),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          const SizedBox(height: 10),
+          _buildMiembrosResumen(
+            membersIds,
+            esAdmin,
+            () => _mostrarListaMiembros(
+              context,
+              clubMembers,
+              currentUserId,
+              esAdmin,
+              widget.clubId,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Construye la imagen del club con fallback y botón de edición para admin.
+  Widget _buildClubImage(String clubImageUrl, bool esAdmin) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Container(
+          width: 160,
+          height: 160,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: AppColors.morado, width: 3),
+          ),
+          child: ClipOval(
+            child: clubImageUrl.isNotEmpty
+                ? Image.network(
+                    clubImageUrl,
+                    fit: BoxFit.cover,
+                    width: double.infinity,
+                    height: double.infinity,
+                    errorBuilder: (context, error, stackTrace) =>
+                        _buildImageFallback(),
+                  )
+                : _buildImageFallback(),
+          ),
+        ),
+        if (esAdmin) _buildEditImageButton(),
+      ],
+    );
+  }
+
+  /// Widget fallback cuando falla la carga de la imagen del club.
+  Widget _buildImageFallback() {
+    return Image.asset(
+      'assets/imagen_app.jpg',
+      fit: BoxFit.cover,
+      width: double.infinity,
+      height: double.infinity,
+      errorBuilder: (context, error, stackTrace) {
+        return Container(
+          color: AppColors.morado.withValues(alpha: 0.1),
+          child: const Icon(Icons.menu_book, color: AppColors.morado, size: 40),
+        );
+      },
+    );
+  }
+
+  /// Botón de edición de imagen para admin (sobrepuesto en la esquina).
+  Widget _buildEditImageButton() {
+    return Positioned(
+      bottom: 0,
+      right: 10,
+      child: Material(
+        color: Colors.white,
+        shape: const CircleBorder(),
+        elevation: 4,
+        child: InkWell(
+          onTap: () => _mostrarDialogoCambiarImagenClub(context, widget.clubId),
+          borderRadius: BorderRadius.circular(20),
+          child: const Padding(
+            padding: EdgeInsets.all(8.0),
+            child: Icon(Icons.edit, color: AppColors.morado, size: 20),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Construye la sección del libro actual con `StreamBuilder` anidado.
+  Widget _buildCurrentBookSection(
+    String libro,
+    String autor,
+    String clubBookId,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const SizedBox(width: 8),
+            Text("Leyendo ahora", style: AppTextStyles.sectionTitle),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _buildUserBookStream(clubBookId, libro, autor),
+      ],
+    );
+  }
+
+  /// StreamBuilder anidado para datos del libro en la biblioteca personal del usuario.
+  Widget _buildUserBookStream(String clubBookId, String libro, String autor) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('user_books')
+          .where('userId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
+          .where('bookId', isEqualTo: clubBookId.isNotEmpty ? clubBookId : '')
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+          return _buildBookNotAddedCard(libro, autor);
+        }
+
+        final userBookDoc = snapshot.data!.docs.first;
+        final userBookData = userBookDoc.data() as Map<String, dynamic>;
+        final String docId = userBookDoc.id;
+        final String formatoActual = userBookData['format'] ?? '';
+
+        if (formatoActual.isEmpty && !_mostrandoDialogoFormato && mounted) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              setState(() => _mostrandoDialogoFormato = true);
+              _mostrarDialogoSeleccionarFormato(
+                docId,
+                userBookData['totalPages'] ?? 0,
+              );
+            }
+          });
+        }
+
+        return TarjetaLibroProgreso(docId: docId, libroData: userBookData);
+      },
+    );
+  }
+
+  /// Tarjeta mostrada cuando el usuario aún no ha agregado el libro a su biblioteca.
+  Widget _buildBookNotAddedCard(String libro, String autor) {
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 70,
+              height: 105,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                color: Colors.grey[200],
+              ),
+              child: const Icon(Icons.broken_image, color: Colors.grey),
+            ),
+            const SizedBox(width: 15),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    libro,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    autor,
+                    style: const TextStyle(fontSize: 14, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    "Añade este libro a tu biblioteca para ver el progreso",
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Panel de administración: código de invitación y acciones (finalizar, reactivar, eliminar).
+  Widget _buildAdminPanel(Map<String, dynamic> data, bool clubFinalizado) {
+    return Column(
+      children: [
+        if (!clubFinalizado) _buildActiveAdminPanel(data),
+        if (clubFinalizado) ...[
+          _buildReactivateButton(),
+          _buildDeleteClubButton(),
+        ],
+      ],
+    );
+  }
+
+  /// Panel de admin para club activo: código de invitación + botón finalizar.
+  Widget _buildActiveAdminPanel(Map<String, dynamic> data) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 0),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.morado.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.morado.withValues(alpha: 0.1)),
+      ),
+      child: Column(
+        children: [
+          // 👇 BLOQUE DEL CÓDIGO COMPLETAMENTE CLICABLE
+          GestureDetector(
+            onTap: () {
+              Clipboard.setData(ClipboardData(text: data['code'] ?? ""));
+              mostrarSnackBar(context, "¡Código copiado!", AppColors.naranja);
+            },
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      "Código de invitación",
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.grey,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      data['code'] ?? "---",
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.morado,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(width: 16),
+                // Icono de copiar (ahora visual, pero también clicable por el GestureDetector padre)
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.morado.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.copy,
+                    size: 18,
+                    color: AppColors.morado,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // 👇 BOTÓN DE FINALIZAR
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _confirmarFinalizarClub,
+              icon: const Icon(Icons.check_circle, size: 18),
+              label: const Text(
+                "Finalizar Club",
+                style: TextStyle(fontSize: 14),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.naranja,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 0,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Botón para reactivar un club finalizado.
+  Widget _buildReactivateButton() {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ElevatedButton.icon(
+        onPressed: _confirmarReactivarClub,
+        icon: const Icon(Icons.refresh),
+        label: const Text("Activar Club"),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.green,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 12),
+        ),
+      ),
+    );
+  }
+
+  /// Botón para eliminar un club permanentemente.
+  Widget _buildDeleteClubButton() {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 15),
+      child: OutlinedButton.icon(
+        onPressed: () => _confirmarEliminarClub(context, widget.clubId),
+        icon: const Icon(Icons.delete_forever, color: Colors.red),
+        label: const Text("Eliminar club", style: TextStyle(color: Colors.red)),
+        style: OutlinedButton.styleFrom(
+          side: const BorderSide(color: Colors.red),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+        ),
+      ),
+    );
+  }
+
+  /// Botón de salida/eliminación al final de la página.
+  Widget _buildExitButton(bool esAdmin) {
+    return Center(
+      child: OutlinedButton.icon(
+        onPressed: esAdmin
+            ? () => _confirmarEliminarClub(context, widget.clubId)
+            : _confirmarSalidaDelClub,
+        icon: Icon(
+          esAdmin ? Icons.delete_forever : Icons.exit_to_app,
+          size: 18,
+        ),
+        label: Text(esAdmin ? "Eliminar club" : "Salir del club"),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.red,
+          side: BorderSide(color: Colors.red),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+        ),
+      ),
+    );
+  }
+
+  /// Footer para club finalizado: botón para volver a la lista de clubes.
+  Widget _buildFooterHistorial() {
+    return Center(
+      child: ElevatedButton.icon(
+        onPressed: () => Navigator.pop(context),
+        icon: const Icon(Icons.arrow_back),
+        label: const Text("Volver a mis clubes"),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.morado,
+          padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
+        ),
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // LÓGICA DE NEGOCIO: SINCRONIZACIÓN Y ACCIONES
+  // ─────────────────────────────────────────────────────────────
+
+  /// Al entrar, verifica si el usuario ya completó el libro en su biblioteca.
+  ///
+  /// Si es así, marca automáticamente `goalReached` en el club para sincronizar estados.
   Future<void> _sincronizarMetaAlEntrar() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null) {
+      return;
+    }
     try {
       final clubDoc = await FirebaseFirestore.instance
           .collection('clubs')
           .doc(widget.clubId)
           .get();
-      if (!clubDoc.exists || !mounted) return;
+      if (!clubDoc.exists || !mounted) {
+        return;
+      }
 
       final clubData = clubDoc.data() as Map<String, dynamic>;
       final String? bookId = clubData['bookId'];
       final Map<String, dynamic> members = clubData['club_members'] ?? {};
 
-      if (bookId == null || bookId.isEmpty) return;
+      if (bookId == null || bookId.isEmpty) {
+        return;
+      }
 
       final userBookSnapshot = await FirebaseFirestore.instance
           .collection('user_books')
@@ -55,7 +639,9 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
           .limit(1)
           .get();
 
-      if (userBookSnapshot.docs.isEmpty) return;
+      if (userBookSnapshot.docs.isEmpty) {
+        return;
+      }
 
       final userBookData = userBookSnapshot.docs.first.data();
       final double progress = (userBookData['progress'] ?? 0).toDouble();
@@ -75,524 +661,162 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    // Stream principal: datos del club (nombre, miembros, estado, meta actual, etc)
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('clubs')
-          .doc(widget.clubId)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
-        if (!snapshot.hasData || !snapshot.data!.exists) {
-          return const Scaffold(
-            body: Center(child: Text("El club no existe.")),
-          );
-        }
-        if (snapshot.hasError) {
-          return const Scaffold(body: Center(child: Text("Error al cargar.")));
-        }
-
-        var data = snapshot.data!.data() as Map<String, dynamic>;
-        data['id'] = snapshot.data!.id;
-
-        String nombreClub = data['name'] ?? "Sin nombre";
-        String libro = data['book'] ?? "Libro no especificado";
-        String autor = data['bookAuthor'] ?? "Autor desconocido";
-        String descripcion = data['description'] ?? "";
-        String ownerId = data['ownerId'] ?? "";
-        String clubBookId = data['bookId'] ?? "";
-        String clubImageUrl = data['clubImageUrl'] ?? "";
-
-        final bool clubFinalizado = data['status'] == 'finalizado';
-        String metaActual = data['currentGoalName'] ?? "Meta no definida";
-        Map<String, dynamic> clubMembers = data['club_members'] ?? {};
-        List membersIds = data['members'] ?? [];
-
-        // Clasificacion de miembros para el semaforo
-        List confirmados = [], leyendo = [], inactivos = [];
-        clubMembers.forEach((uid, info) {
-          if (info['goalReached'] ?? false) {
-            confirmados.add(uid);
-          } else if (info['isReading'] ?? false) {
-            leyendo.add(uid);
-          } else {
-            inactivos.add(uid);
-          }
-        });
-
-        String fechaFormateada = "";
-        if (data['limitDate'] != null) {
-          fechaFormateada = formatearFechaCorta(data['limitDate']);
-        }
-
-        String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? "";
-        bool esAdmin = ownerId == currentUserId;
-
-        final datosUsuarioActual =
-            clubMembers[currentUserId] as Map<String, dynamic>?;
-        final userNameActual =
-            datosUsuarioActual?['userName'] ??
-            FirebaseAuth.instance.currentUser?.displayName ??
-            "Usuario";
-        final userPhotoActual =
-            datosUsuarioActual?['userPhoto'] ??
-            FirebaseAuth.instance.currentUser?.photoURL ??
-            "";
-
-        final goalReachedUsuario = datosUsuarioActual?['goalReached'] ?? false;
-        final isReadingUsuario = datosUsuarioActual?['isReading'] ?? false;
-
-        return Scaffold(
-          backgroundColor: Colors.grey[50],
-          appBar: AppBar(
-            backgroundColor: Colors.white,
-            elevation: 0,
-            foregroundColor: AppColors.morado,
-            leading: IconButton(
-              icon: const Icon(Icons.arrow_back),
-              onPressed: () => Navigator.pop(context),
-            ),
+  /// Muestra diálogo de confirmación y finaliza el club.
+  void _confirmarFinalizarClub() {
+    final navigator = Navigator.of(context);
+    showDialog(
+      context: context,
+      useRootNavigator: true,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text("Finalizar Club"),
+        content: const Text("Esta acción cerrará el club definitivamente."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text("Cancelar"),
           ),
-          body: SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Cabecera: imagen circular, nombre, descripcion, resumen de miembros
-                Center(
-                  child: Column(
-                    children: [
-                      Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          Container(
-                            width: 160,
-                            height: 160,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: AppColors.morado,
-                                width: 3,
-                              ),
-                            ),
-                            child: ClipOval(
-                              child: (clubImageUrl.isNotEmpty)
-                                  ? Image.network(
-                                      clubImageUrl,
-                                      fit: BoxFit.cover,
-                                      width: double.infinity,
-                                      height: double.infinity,
-                                      errorBuilder:
-                                          (context, error, stackTrace) {
-                                            return Image.asset(
-                                              'assets/icono_app.png',
-                                              fit: BoxFit.cover,
-                                            );
-                                          },
-                                    )
-                                  : Image.asset(
-                                      'assets/imagen_app.jpg',
-                                      fit: BoxFit.cover,
-                                      width: double.infinity,
-                                      height: double.infinity,
-                                    ),
-                            ),
-                          ),
-                          if (esAdmin)
-                            Positioned(
-                              bottom: 0,
-                              right: 10,
-                              child: Material(
-                                color: Colors.white,
-                                shape: CircleBorder(),
-                                elevation: 4,
-                                child: InkWell(
-                                  onTap: () => _mostrarDialogoCambiarImagenClub(
-                                    context,
-                                    widget.clubId,
-                                  ),
-                                  borderRadius: BorderRadius.circular(20),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(8.0),
-                                    child: Icon(
-                                      Icons.edit,
-                                      color: AppColors.morado,
-                                      size: 20,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 15),
-
-                      Text(
-                        nombreClub,
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.morado,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                      if (descripcion.isNotEmpty &&
-                          descripcion != "Sin descripción")
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 5,
-                          ),
-                          child: Text(
-                            descripcion,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey[700]),
-                            maxLines: 3,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      const SizedBox(height: 10),
-                      _buildMiembrosResumen(
-                        membersIds,
-                        esAdmin,
-                        () => _mostrarListaMiembros(
-                          context,
-                          clubMembers,
-                          currentUserId,
-                          esAdmin,
-                          widget.clubId,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 30),
-
-                // Tarjeta del libro actual con progreso
-                Row(
-                  children: [
-                    Icon(Icons.menu_book, color: AppColors.morado),
-                    const SizedBox(width: 8),
-                    Text(
-                      "Leyendo ahora",
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.morado,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-
-                // Stream anidado: datos del libro en la biblioteca personal del usuario
-                StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('user_books')
-                      .where(
-                        'userId',
-                        isEqualTo: FirebaseAuth.instance.currentUser?.uid,
-                      )
-                      .where(
-                        'bookId',
-                        isEqualTo: clubBookId.isNotEmpty ? clubBookId : '',
-                      )
-                      .snapshots(),
-                  builder: (context, snapshot) {
-                    // El usuario aun no ha agregado el libro a su biblioteca
-                    if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                      return Card(
-                        elevation: 2,
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 0,
-                          vertical: 8,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(15),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Container(
-                                width: 70,
-                                height: 105,
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(8),
-                                  color: Colors.grey[200],
-                                ),
-                                child: const Icon(
-                                  Icons.broken_image,
-                                  color: Colors.grey,
-                                ),
-                              ),
-                              const SizedBox(width: 15),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      libro,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      autor,
-                                      style: const TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.grey,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 12),
-                                    const Text(
-                                      "Añade este libro a tu biblioteca para ver el progreso",
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: Colors.grey,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }
-
-                    final userBookDoc = snapshot.data!.docs.first;
-                    final userBookData =
-                        userBookDoc.data() as Map<String, dynamic>;
-                    final String docId = userBookDoc.id;
-
-                    // Si el usuario no ha seleccionado formato (Papel/Digital), se pregunta una vez
-                    final String formatoActual = userBookData['format'] ?? '';
-
-                    if (formatoActual.isEmpty &&
-                        !_mostrandoDialogoFormato &&
-                        mounted) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        setState(() => _mostrandoDialogoFormato = true);
-                        _mostrarDialogoSeleccionarFormato(
-                          docId,
-                          userBookData['totalPages'] ?? 0,
-                        );
-                      });
-                    }
-
-                    return TarjetaLibroProgreso(
-                      docId: docId,
-                      libroData: userBookData,
-                    );
-                  },
-                ),
-                const SizedBox(height: 30),
-
-                // Panel de admin: codigo de invitacion y acciones
-                if (esAdmin) ...[
-                  if (!clubFinalizado)
-                    Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 0),
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: AppColors.morado.withValues(alpha: 0.05),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: AppColors.morado.withValues(alpha: 0.1),
-                        ),
-                      ),
-                      child: Column(
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    "Código de invitación:",
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                                  Text(
-                                    data['code'] ?? "---",
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.morado,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.copy, size: 20),
-                                onPressed: () {
-                                  Clipboard.setData(
-                                    ClipboardData(text: data['code'] ?? ""),
-                                  );
-                                  mostrarSnackBar(
-                                    context,
-                                    "¡Código copiado!",
-                                    AppColors.naranja,
-                                  );
-                                },
-                              ),
-                            ],
-                          ),
-                          const Divider(height: 25),
-                          ElevatedButton.icon(
-                            onPressed: _confirmarFinalizarClub,
-                            icon: const Icon(Icons.check_circle, size: 18),
-                            label: const Text("Finalizar Club"),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.naranja,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                                vertical: 10,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                  if (clubFinalizado) ...[
-                    Container(
-                      width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 10),
-                      child: ElevatedButton.icon(
-                        onPressed: _confirmarReactivarClub,
-                        icon: const Icon(Icons.refresh),
-                        label: const Text("Activar Club"),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
-                    Container(
-                      width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 15),
-                      child: OutlinedButton.icon(
-                        onPressed: () =>
-                            _confirmarEliminarClub(context, widget.clubId),
-                        icon: const Icon(
-                          Icons.delete_forever,
-                          color: Colors.red,
-                        ),
-                        label: const Text(
-                          "Eliminar club",
-                          style: TextStyle(color: Colors.red),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Colors.red),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-                const SizedBox(height: 20),
-
-                // Meta actual (o banner finalizado)
-                clubFinalizado
-                    ? _buildBannerFinalizado(data, libro)
-                    : _buildSeccionMeta(
-                        metaActual,
-                        fechaFormateada,
-                        esAdmin,
-                        data,
-                        currentUserId,
-                        goalReachedUsuario,
-                        isReadingUsuario,
-                      ),
-                const SizedBox(height: 25),
-
-                // Semaforo de progreso grupal (activo) o lista detallada (finalizado)
-                clubFinalizado
-                    ? _buildListaProgresoFinal(clubMembers)
-                    : _buildSemaforo(
-                        confirmados,
-                        leyendo,
-                        inactivos,
-                        clubMembers,
-                      ),
-                const SizedBox(height: 25),
-
-                // Seccion de comentarios (activa con input o archivada solo lectura)
-                clubFinalizado
-                    ? _buildSeccionComentariosArchivado(
-                        widget.clubId,
-                        data['currentGoalId'] ?? "meta_inicial",
-                      )
-                    : _buildSeccionComentarios(
-                        widget.clubId,
-                        data['currentGoalId'] ?? "meta_inicial",
-                        userNameActual,
-                        userPhotoActual,
-                        currentUserId,
-                      ),
-
-                const SizedBox(height: 30),
-
-                // Boton de salida o eliminacion al final
-                clubFinalizado
-                    ? _buildFooterHistorial()
-                    : Center(
-                        child: OutlinedButton.icon(
-                          onPressed: esAdmin
-                              ? () => _confirmarEliminarClub(
-                                  context,
-                                  widget.clubId,
-                                )
-                              : _confirmarSalidaDelClub,
-                          icon: Icon(
-                            esAdmin ? Icons.delete_forever : Icons.exit_to_app,
-                            size: 18,
-                          ),
-                          label: Text(
-                            esAdmin ? "Eliminar club" : "Salir del club",
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.red,
-                            side: BorderSide(color: Colors.red),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 10,
-                            ),
-                            textStyle: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ),
-                      ),
-              ],
-            ),
+          TextButton(
+            onPressed: () async {
+              await DatabaseService.finalizarClub(widget.clubId);
+              if (dialogContext.mounted) {
+                mostrarSnackBar(
+                  dialogContext,
+                  "Club finalizado.",
+                  AppColors.naranja,
+                );
+                Navigator.pop(dialogContext);
+              }
+              navigator.pop();
+            },
+            child: const Text("Finalizar", style: TextStyle(color: Colors.red)),
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 
-  /// Texto resumen de miembros que abre el dialog de lista completa.
+  /// Muestra diálogo de confirmación y reactiva el club.
+  void _confirmarReactivarClub() async {
+    final bool? confirmar = await mostrarDialogoReactivar(
+      context: context,
+      titulo: "¿Reactivar Club?",
+      contenido:
+          "Esto volverá a abrir el club para todos los miembros. La meta actual se mantendrá.",
+    );
+    if (confirmar == true) {
+      await DatabaseService.reactivarClub(widget.clubId);
+      if (!mounted) {
+        return;
+      }
+      if (mounted) {
+        Navigator.pop(context);
+      }
+      mostrarSnackBar(
+        context,
+        "Club reactivado correctamente.",
+        AppColors.naranja,
+      );
+    }
+  }
+
+  /// Muestra diálogo de confirmación y elimina el club permanentemente.
+  void _confirmarEliminarClub(BuildContext context, String clubId) async {
+    final bool? confirmar = await mostrarDialogoConfirmacion(
+      context: context,
+      titulo: "¿Eliminar club permanentemente?",
+      contenido:
+          "Esta acción NO se puede deshacer. Se eliminará el club, metas, comentarios e historial.",
+      textoAccion: "Sí, eliminar todo",
+      colorAccion: Colors.red,
+    );
+    if (confirmar == true) {
+      try {
+        await DatabaseService.eliminarClub(clubId);
+        if (!context.mounted) {
+          return;
+        }
+        mostrarSnackBar(context, "Club eliminado permanentemente", Colors.red);
+        Navigator.pop(context);
+      } catch (e) {
+        if (context.mounted) {
+          mostrarSnackBar(context, "Error al eliminar el club: $e", Colors.red);
+        }
+      }
+    }
+  }
+
+  /// Muestra diálogo de confirmación y permite al usuario salir del club.
+  void _confirmarSalidaDelClub() {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text("Salir del club"),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Dejarás de ser miembro y perderás tu progreso en este club."),
+            SizedBox(height: 12),
+            Text(
+              "El libro permanecerá en tu biblioteca personal.",
+              style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text("Cancelar"),
+          ),
+          TextButton(
+            onPressed: () async {
+              try {
+                final user = FirebaseAuth.instance.currentUser;
+                if (user == null) {
+                  return;
+                }
+                await DatabaseService.eliminarUsuarioDelClub(
+                  widget.clubId,
+                  user.uid,
+                );
+                if (dialogContext.mounted) {
+                  Navigator.pop(dialogContext);
+                }
+                if (mounted) {
+                  mostrarSnackBar(
+                    context,
+                    "Has salido del club. El libro sigue en tu biblioteca personal",
+                    AppColors.naranja,
+                  );
+                  Navigator.pop(context);
+                }
+              } catch (e) {
+                if (mounted) {
+                  mostrarSnackBar(
+                    context,
+                    "Error al salir del club: $e",
+                    Colors.red,
+                  );
+                }
+              }
+            },
+            child: const Text(
+              "Salir",
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // HELPERS DE UI (MÉTODOS AUXILIARES)
+  // ─────────────────────────────────────────────────────────────
+
+  /// Texto resumen de miembros que abre el diálogo de lista completa.
   Widget _buildMiembrosResumen(
     List<dynamic> fotos,
     bool esAdmin,
@@ -617,8 +841,12 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Tarjeta de meta actual con gradiente dinamico segun estado del usuario.
-  /// Los estados son: goalReached (verde), isReading (naranja), pendiente (rojo).
+  /// Tarjeta de meta actual con gradiente dinámico según estado del usuario.
+  ///
+  /// Estados visuales:
+  /// - 🟢 Verde: `goalReached == true` (meta lograda)
+  /// - 🟠 Naranja: `isReading == true` (en progreso)
+  /// - 🔴 Rojo: pendiente de empezar
   Widget _buildSeccionMeta(
     String meta,
     String fechaLimite,
@@ -630,16 +858,16 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
   ) {
     final bool estaTerminado = goalReached;
     final bool estaLeyendo = isReading;
-
-    Color colorEstado = Colors.red;
-    IconData iconoEstado = Icons.circle_outlined;
-    if (estaTerminado) {
-      colorEstado = Colors.green;
-      iconoEstado = Icons.check_circle;
-    } else if (estaLeyendo) {
-      colorEstado = Colors.orange;
-      iconoEstado = Icons.play_circle;
-    }
+    final Color colorEstado = estaTerminado
+        ? Colors.green
+        : estaLeyendo
+        ? Colors.orange
+        : Colors.red;
+    final IconData iconoEstado = estaTerminado
+        ? Icons.check_circle
+        : estaLeyendo
+        ? Icons.play_circle
+        : Icons.circle_outlined;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -702,6 +930,8 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Row(
+                          mainAxisSize: MainAxisSize
+                              .min, // 👈 Clave: no expandir innecesariamente
                           children: [
                             Icon(
                               Icons.calendar_today,
@@ -709,12 +939,18 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                               color: colorEstado.withValues(alpha: 0.7),
                             ),
                             const SizedBox(width: 6),
-                            Text(
-                              fechaLimite,
-                              style: TextStyle(
-                                color: colorEstado.withValues(alpha: 0.8),
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
+                            Flexible(
+                              // 👈 Permite que el texto se encoja si no hay espacio
+                              child: Text(
+                                fechaLimite,
+                                style: TextStyle(
+                                  color: colorEstado.withValues(alpha: 0.8),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                maxLines: 1, // 👈 Una sola línea
+                                overflow: TextOverflow
+                                    .ellipsis, // 👈 Muestra "..." si no cabe
                               ),
                             ),
                           ],
@@ -784,7 +1020,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Boton de accion de la meta: cambiar estados (empezar, marcar llegada, deshabilitado si ya llego)
+  /// Botón de acción de la meta: cambiar estados (empezar, marcar llegada, deshabilitado si ya llegó).
   Widget _buildBotonEstadoMeta(
     String clubId,
     String userId,
@@ -869,12 +1105,16 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Semaforo de progreso grupal: tres filas con chips de nombres.
-  /// Verde: goalReached, Naranja: isReading, Rojo: inactivos.
+  /// Semáforo de progreso grupal: tres filas con chips de nombres.
+  ///
+  /// Colores:
+  /// - 🟢 Verde: `goalReached` (llegaron a la meta)
+  /// - 🟠 Naranja: `isReading` (leyendo el tramo actual)
+  /// - 🔴 Rojo: inactivos (aún no han empezado)
   Widget _buildSemaforo(
-    List confirmados,
-    List leyendo,
-    List inactivos,
+    List<dynamic> confirmados,
+    List<dynamic> leyendo,
+    List<dynamic> inactivos,
     Map<String, dynamic> clubMembers,
   ) {
     if (confirmados.isEmpty && leyendo.isEmpty && inactivos.isEmpty) {
@@ -883,10 +1123,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          "Como progresamos",
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
+        const Text("Cómo progresamos", style: AppTextStyles.sectionTitle),
         const SizedBox(height: 15),
         if (confirmados.isNotEmpty) ...[
           _rowSemaforo(
@@ -922,6 +1159,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
+  /// Fila individual del semáforo con icono, etiqueta y chips de nombres.
   Widget _rowSemaforo(
     IconData icon,
     Color color,
@@ -960,7 +1198,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                     ),
                   ]
                 : ids.map((id) {
-                    String nombre =
+                    final String nombre =
                         clubMembers[id.toString()]?['userName'] ?? "Usuario";
                     return _chipNombreUsuario(nombre, color);
                   }).toList(),
@@ -970,6 +1208,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
+  /// Chip visual para nombre de usuario en el semáforo.
   Widget _chipNombreUsuario(String nombre, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -989,7 +1228,8 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Seccion de comentarios activa: muestra ultimos 3 comentarios y boton para abrir muro completo.
+  /// Sección de comentarios activa: muestra últimos 3 comentarios + botón para abrir muro completo.
+  /// Sección de comentarios activa: muestra últimos 3 comentarios con scroll interno.
   Widget _buildSeccionComentarios(
     String clubId,
     String? currentGoalId,
@@ -1000,13 +1240,11 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          "Comentarios y Debate",
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
+        const Text("Comentarios y Debate", style: AppTextStyles.sectionTitle),
         const SizedBox(height: 10),
         Container(
-          height: 150,
+          // ✅ Altura aumentada + scroll interno
+          height: 200, // 👈 Más espacio para ver 3 comentarios completos
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: Colors.white,
@@ -1021,6 +1259,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
           ),
           child: Stack(
             children: [
+              // ✅ ListView con scroll interno
               StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
                     .collection('clubs')
@@ -1035,7 +1274,9 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(child: CircularProgressIndicator());
                   }
+
                   final docs = snapshot.data?.docs ?? [];
+
                   if (docs.isEmpty) {
                     return const Center(
                       child: Text(
@@ -1044,9 +1285,12 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                       ),
                     );
                   }
+
                   return ListView.separated(
                     shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
+                    // ✅ Scroll habilitado para ver comentarios largos
+                    physics:
+                        const ScrollPhysics(), // 👈 Cambiado de NeverScrollableScrollPhysics
                     itemCount: docs.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
                     itemBuilder: (context, index) {
@@ -1078,9 +1322,10 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                                   style: TextStyle(
                                     color: Colors.grey[700],
                                     fontSize: 13,
+                                    height:
+                                        1.3, // 👈 Mejor espaciado entre líneas
                                   ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
+                                  // ✅ Eliminado maxLines y overflow → texto completo visible
                                 ),
                               ],
                             ),
@@ -1135,7 +1380,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Dialog modal con lista completa de comentarios y campo para escribir nuevos.
+  /// Diálogo modal con lista completa de comentarios y campo para escribir nuevos.
   void _abrirMuroCompletos(
     BuildContext context,
     String clubId,
@@ -1148,7 +1393,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     final String idReferencia = (goalId == null || goalId.isEmpty)
         ? "sin_meta"
         : goalId;
-
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -1226,7 +1470,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Input de texto para enviar comentarios. Recibe datos de usuario por parametro.
+  /// Input de texto para enviar comentarios en el muro del club.
   Widget _buildInputComentario(
     String clubId,
     String goalId,
@@ -1235,7 +1479,6 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     String userId,
   ) {
     final TextEditingController controller = TextEditingController();
-
     return Container(
       padding: const EdgeInsets.only(top: 15, left: 15, right: 15, bottom: 15),
       decoration: BoxDecoration(
@@ -1269,8 +1512,9 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
               icon: const Icon(Icons.send, color: Colors.white, size: 20),
               onPressed: () async {
                 final String texto = controller.text.trim();
-                if (texto.isEmpty) return;
-
+                if (texto.isEmpty) {
+                  return;
+                }
                 try {
                   await DatabaseService.enviarComentario(
                     clubId: clubId,
@@ -1280,9 +1524,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                     userName: userName,
                     userPhoto: userPhoto,
                   );
-
                   controller.clear();
-
                   if (mounted) {
                     FocusScopeNode currentFocus = FocusScope.of(context);
                     if (!currentFocus.hasPrimaryFocus &&
@@ -1293,7 +1535,11 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                 } catch (e) {
                   debugPrint("Error enviando comentario: $e");
                   if (mounted) {
-                    mostrarSnackBar(context, "Error al enviar comentario.", Colors.red);
+                    mostrarSnackBar(
+                      context,
+                      "Error al enviar comentario.",
+                      Colors.red,
+                    );
                   }
                 }
               },
@@ -1304,7 +1550,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Lista completa de comentarios para el muro.
+  /// Lista completa de comentarios para el muro del club.
   Widget _buildListaComentariosCompleta(String clubId, String goalId) {
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
@@ -1320,21 +1566,18 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
           return const Center(child: CircularProgressIndicator());
         }
         final docs = snapshot.data!.docs;
-
         if (docs.isEmpty) {
           return const Center(child: Text("No hay comentarios aún."));
         }
-
         return ListView.builder(
           shrinkWrap: false,
           physics: const BouncingScrollPhysics(),
           padding: const EdgeInsets.all(20),
           itemCount: docs.length,
           itemBuilder: (context, index) {
-            var data = docs[index].data() as Map<String, dynamic>;
-            bool esMio =
+            final data = docs[index].data() as Map<String, dynamic>;
+            final bool esMio =
                 data['userId'] == FirebaseAuth.instance.currentUser?.uid;
-
             return Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: Row(
@@ -1391,7 +1634,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Dialog para ver historial de metas pasadas y sus debates (solo lectura).
+  /// Diálogo para ver historial de metas pasadas y sus debates (solo lectura).
   void _mostrarHistorialMetas(
     BuildContext context,
     String clubId,
@@ -1472,7 +1715,8 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                           padding: const EdgeInsets.symmetric(horizontal: 10),
                           itemCount: metas.length,
                           itemBuilder: (context, index) {
-                            var m = metas[index].data() as Map<String, dynamic>;
+                            final m =
+                                metas[index].data() as Map<String, dynamic>;
                             return ListTile(
                               leading: const Icon(
                                 Icons.check_circle,
@@ -1517,7 +1761,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Dialog para que el admin cree una nueva meta (nombre y fecha limite).
+  /// Diálogo para que el admin cree una nueva meta (nombre y fecha límite).
   void _mostrarDialogoNuevaMeta(
     BuildContext context,
     Map<String, dynamic> clubData,
@@ -1566,7 +1810,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        "El libro tiene $totalPaginas paginas.",
+                        "El libro tiene $totalPaginas páginas.",
                         style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                       ),
                       const SizedBox(height: 25),
@@ -1585,7 +1829,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                               Icons.flag_circle_outlined,
                               color: Colors.orange,
                             ),
-                            hintText: "Ej: Pagina 150 o Capitulo 10",
+                            hintText: "Ej: Página 150 o Capítulo 10",
                             border: InputBorder.none,
                           ),
                         ),
@@ -1641,7 +1885,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                               Expanded(
                                 child: Text(
                                   fechaSeleccionada == null
-                                      ? "Fecha limite"
+                                      ? "Fecha límite"
                                       : "${fechaSeleccionada!.day}/${fechaSeleccionada!.month}/${fechaSeleccionada!.year}",
                                   style: const TextStyle(
                                     fontWeight: FontWeight.w500,
@@ -1676,9 +1920,13 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                                 fecha: fechaSeleccionada!,
                                 todosLosUids: miembrosIds,
                               );
-                              if (context.mounted) Navigator.pop(context);
+                              if (context.mounted) {
+                                Navigator.pop(context);
+                              }
                             } catch (e) {
-                              if (!context.mounted) return;
+                              if (!context.mounted) {
+                                return;
+                              }
                               mostrarSnackBar(
                                 context,
                                 "Error al guardar",
@@ -1716,12 +1964,12 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Banner mostrado cuando el club esta finalizado.
+  /// Banner mostrado cuando el club está finalizado.
   Widget _buildBannerFinalizado(Map<String, dynamic> data, String libro) {
     String fechaFin = "Fecha desconocida";
     if (data['endDate'] != null) {
-      DateTime fecha = (data['endDate'] as Timestamp).toDate();
-      const meses = [
+      final DateTime fecha = (data['endDate'] as Timestamp).toDate();
+      const List<String> meses = [
         "",
         "Ene",
         "Feb",
@@ -1776,12 +2024,14 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
   }
 
   /// Lista detallada de progreso individual para clubs finalizados.
-  /// Ordenada por progreso descendente. Incluye frases aleatorias.
+  ///
+  /// Ordenada por progreso descendente. Incluye frases aleatorias para gamificar.
   Widget _buildListaProgresoFinal(Map<String, dynamic> clubMembers) {
-    List<MapEntry<String, dynamic>> miembrosList = clubMembers.entries.toList();
+    final List<MapEntry<String, dynamic>> miembrosList = clubMembers.entries
+        .toList();
     miembrosList.sort((a, b) {
-      double progA = (a.value['progress'] ?? 0).toDouble();
-      double progB = (b.value['progress'] ?? 0).toDouble();
+      final double progA = (a.value['progress'] ?? 0).toDouble();
+      final double progB = (b.value['progress'] ?? 0).toDouble();
       return progB.compareTo(progA);
     });
     return Column(
@@ -1801,18 +2051,17 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
           ),
           child: Column(
             children: miembrosList.map((entry) {
-              Map<String, dynamic> info = entry.value;
-              String nombre = info['userName'] ?? "Usuario";
-              double progreso = (info['progress'] ?? 0).toDouble().clamp(
+              final Map<String, dynamic> info = entry.value;
+              final String nombre = info['userName'] ?? "Usuario";
+              final double progreso = (info['progress'] ?? 0).toDouble().clamp(
                 0.0,
                 100.0,
               );
-              bool esAdmin = info['role'] == 'admin';
-
-              IconData iconoEstado;
-              Color colorEstado;
-              String textoPorcentaje;
-              String textoAnimado;
+              final bool esAdmin = info['role'] == 'admin';
+              final IconData iconoEstado;
+              final Color colorEstado;
+              final String textoPorcentaje;
+              final String textoAnimado;
               if (progreso >= 100) {
                 iconoEstado = Icons.check_circle;
                 colorEstado = Colors.green;
@@ -1890,35 +2139,47 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  // Frases aleatorias para gamificar el resumen final
+  // ─────────────────────────────────────────────────────────────
+  // FRASES ALEATORIAS PARA GAMIFICACIÓN
+  // ─────────────────────────────────────────────────────────────
+
+  /// Frase aleatoria para usuarios que completaron el libro.
   String _obtenerFraseFinalizada() {
-    const frases = [
+    const List<String> frases = [
       "Libro devorado!",
       "Meta personal cumplida",
       "Lectura completada!",
-      "Mision libro acabada!",
+      "Misión libro acabada!",
     ];
     return frases[DateTime.now().millisecond % frases.length];
   }
 
+  /// Frase aleatoria según el progreso actual del usuario.
   String _obtenerFraseEnProgreso(double progreso) {
-    if (progreso >= 75) return "Ya casi lo tienes!";
-    if (progreso >= 50) return "A mitad de camino!";
-    if (progreso >= 25) return "Avanzando poco a poco";
-    return "Leyendo... tu puedes!";
+    if (progreso >= 75) {
+      return "Ya casi lo tienes!";
+    }
+    if (progreso >= 50) {
+      return "A mitad de camino!";
+    }
+    if (progreso >= 25) {
+      return "Avanzando poco a poco";
+    }
+    return "Leyendo... ¡tú puedes!";
   }
 
+  /// Frase aleatoria para usuarios que aún no han empezado.
   String _obtenerFrasePendiente() {
-    const frases = [
+    const List<String> frases = [
       "Por empezar...",
       "Pendiente de lectura",
-      "Sin empezar aun",
+      "Sin empezar aún",
       "Esperando su turno",
     ];
     return frases[DateTime.now().millisecond % frases.length];
   }
 
-  /// Version archivada de la seccion de comentarios (solo lectura).
+  /// Versión archivada de la sección de comentarios (solo lectura).
   Widget _buildSeccionComentariosArchivado(
     String clubId,
     String currentGoalId,
@@ -1949,7 +2210,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
           child: Column(
             children: [
               Icon(Icons.archive, size: 40, color: Colors.grey),
-              SizedBox(height: 12),
+              const SizedBox(height: 12),
               Text(
                 "Debate archivado",
                 style: TextStyle(
@@ -1960,7 +2221,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
               ),
               const SizedBox(height: 8),
               Text(
-                "Este club ya esta cerrado pero puedes revivir los comentarios anteriores",
+                "Este club ya está cerrado pero puedes revivir los comentarios anteriores",
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 14,
@@ -1992,161 +2253,11 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  Widget _buildFooterHistorial() {
-    return Column(
-      children: [
-        Center(
-          child: ElevatedButton.icon(
-            onPressed: () => Navigator.pop(context),
-            icon: const Icon(Icons.arrow_back),
-            label: const Text("Volver a mis clubes"),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.morado,
-              padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
+  // ─────────────────────────────────────────────────────────────
+  // DIÁLOGOS Y GESTIÓN DE MIEMBROS
+  // ─────────────────────────────────────────────────────────────
 
-  void _confirmarReactivarClub() async {
-    final bool? confirmar = await mostrarDialogoReactivar(
-      context: context,
-      titulo: "¿Reactivar Club?",
-      contenido:
-          "Esto volverá a abrir el club para todos los miembros. La meta actual se mantendrá.",
-    );
-    if (confirmar == true) {
-      await DatabaseService.reactivarClub(widget.clubId);
-      if (!mounted) return;
-      if (mounted) Navigator.pop(context);
-      mostrarSnackBar(
-        context,
-        "Club reactivado correctamente.",
-        AppColors.naranja,
-      );
-    }
-  }
-
-  void _confirmarEliminarClub(BuildContext context, String clubId) async {
-    final bool? confirmar = await mostrarDialogoConfirmacion(
-      context: context,
-      titulo: "¿Eliminar club permanentemente?",
-      contenido:
-          "Esta acción NO se puede deshacer. Se eliminará el club, metas, comentarios y historial.",
-      textoAccion: "Sí, eliminar todo",
-      colorAccion: Colors.red,
-    );
-    if (confirmar == true) {
-      try {
-        await DatabaseService.eliminarClub(clubId);
-        if (!context.mounted) return;
-        mostrarSnackBar(context, "Club eliminado permanentemente", Colors.red);
-        Navigator.pop(context);
-      } catch (e) {
-        if (context.mounted) {
-          mostrarSnackBar(context, "Error al eliminar el club: $e", Colors.red);
-        }
-      }
-    }
-  }
-
-  void _confirmarFinalizarClub() {
-    final navigator = Navigator.of(context);
-    showDialog(
-      context: context,
-      useRootNavigator: true,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text("Finalizar Club"),
-        content: const Text("Esta accion cerrara el club definitivamente."),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text("Cancelar"),
-          ),
-          TextButton(
-            onPressed: () async {
-              await DatabaseService.finalizarClub(widget.clubId);
-              if (dialogContext.mounted) {
-                mostrarSnackBar(
-                  dialogContext,
-                  "Club finalizado.",
-                  AppColors.naranja,
-                );
-                Navigator.pop(dialogContext);
-              }
-              navigator.pop();
-            },
-            child: const Text("Finalizar", style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _confirmarSalidaDelClub() {
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text("Salir del club"),
-        content: const Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text("Dejaras de ser miembro y perderas tu progreso en este club."),
-            SizedBox(height: 12),
-            Text(
-              "El libro permanecera en tu biblioteca personal.",
-              style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
-            ),
-          ],
-        ),
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text("Cancelar"),
-          ),
-          TextButton(
-            onPressed: () async {
-              try {
-                final user = FirebaseAuth.instance.currentUser;
-                if (user == null) return;
-                await DatabaseService.eliminarUsuarioDelClub(
-                  widget.clubId,
-                  user.uid,
-                );
-                if (dialogContext.mounted) Navigator.pop(dialogContext);
-                if (mounted) {
-                  mostrarSnackBar(
-                    context,
-                    "Has salido del club. El libro sigue en tu biblioteca personal",
-                    AppColors.naranja,
-                  );
-                  Navigator.pop(context);
-                }
-              } catch (e) {
-                if (mounted) {
-                  mostrarSnackBar(
-                    context,
-                    "Error al salir del club: $e",
-                    Colors.red,
-                  );
-                }
-              }
-            },
-            child: const Text(
-              "Salir",
-              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
+  /// Diálogo para cambiar la imagen del club (solo admin).
   void _mostrarDialogoCambiarImagenClub(BuildContext context, String clubId) {
     final TextEditingController urlController = TextEditingController();
     showDialog(
@@ -2171,7 +2282,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
             ),
             const SizedBox(height: 10),
             const Text(
-              "Nota: Esta imagen se vera en la lista de clubs, no aqui.",
+              "Nota: Esta imagen se verá en la lista de clubs, no aquí.",
               style: TextStyle(fontSize: 11, color: Colors.grey),
             ),
           ],
@@ -2183,7 +2294,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
           ),
           ElevatedButton(
             onPressed: () async {
-              final newUrl = urlController.text.trim();
+              final String newUrl = urlController.text.trim();
               try {
                 await FirebaseFirestore.instance
                     .collection('clubs')
@@ -2211,6 +2322,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
+  /// Diálogo con lista completa de miembros del club.
   void _mostrarListaMiembros(
     BuildContext context,
     Map<String, dynamic> clubMembers,
@@ -2258,16 +2370,17 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                   child: ListView(
                     shrinkWrap: true,
                     children: clubMembers.entries.map((entry) {
-                      String uid = entry.key;
-                      Map<String, dynamic> info =
+                      final String uid = entry.key;
+                      final Map<String, dynamic> info =
                           entry.value as Map<String, dynamic>;
-                      String nombre = info['userName'] ?? "Usuario";
-                      String foto = info['userPhoto'] ?? "";
-                      String role = info['role'] ?? "miembro";
-                      Map<String, dynamic> stats = info['statsSnapshot'] ?? {};
-                      bool soyYo = uid == currentUserId;
-                      bool esAdminMember = role == 'admin';
-                      String gossip = _generarFraseGossip(stats);
+                      final String nombre = info['userName'] ?? "Usuario";
+                      final String foto = info['userPhoto'] ?? "";
+                      final String role = info['role'] ?? "miembro";
+                      final Map<String, dynamic> stats =
+                          info['statsSnapshot'] ?? {};
+                      final bool soyYo = uid == currentUserId;
+                      final bool esAdminMember = role == 'admin';
+                      final String gossip = _generarFraseGossip(stats);
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 15),
                         child: Row(
@@ -2352,6 +2465,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
+  /// Diálogo de confirmación para expulsar a un miembro del club.
   void _confirmarExpulsion(
     BuildContext parentContext,
     String clubId,
@@ -2363,7 +2477,7 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text("Expulsar miembro"),
-          content: Text("Se eliminara a $nombre del club."),
+          content: Text("Se eliminará a $nombre del club."),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
@@ -2374,9 +2488,13 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                 final safeDialogCtx = dialogContext;
                 final safeParentCtx = parentContext;
                 await DatabaseService.eliminarUsuarioDelClub(clubId, uid);
-                if (!safeDialogCtx.mounted) return;
+                if (!safeDialogCtx.mounted) {
+                  return;
+                }
                 Navigator.pop(safeDialogCtx);
-                if (!safeParentCtx.mounted) return;
+                if (!safeParentCtx.mounted) {
+                  return;
+                }
                 mostrarSnackBar(
                   safeParentCtx,
                   "$nombre ha sido expulsado",
@@ -2397,11 +2515,11 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     );
   }
 
-  /// Genera una frase basada en las estadisticas de lectura del miembro.
+  /// Genera una frase basada en las estadísticas de lectura del miembro.
   String _generarFraseGossip(Map<String, dynamic> stats) {
-    int leidos = stats['booksRead'] ?? 0;
-    int leyendo = stats['currentlyReading'] ?? 0;
-    List<String> frases = [];
+    final int leidos = stats['booksRead'] ?? 0;
+    final int leyendo = stats['currentlyReading'] ?? 0;
+    final List<String> frases = [];
     if (leidos > 50) {
       frases.add("Es un devorador de libros!");
     } else if (leidos > 20) {
@@ -2411,18 +2529,17 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
     } else {
       frases.add("Nuevo en el mundo lector.");
     }
-
     if (leyendo > 3) {
       frases.add(" Lee varios a la vez!");
     } else if (leyendo > 1) {
       frases.add(" Tiene varios entre manos.");
     }
-
     return frases.join(" ");
   }
 
-  /// Dialogo inicial obligatorio cuando el usuario no ha seleccionado formato.
-  /// Se muestra una sola vez al entrar al detalle del club si format esta vacio.
+  /// Diálogo inicial obligatorio cuando el usuario no ha seleccionado formato.
+  ///
+  /// Se muestra una sola vez al entrar al detalle del club si `format` está vacío.
   void _mostrarDialogoSeleccionarFormato(String userBookId, int totalPaginas) {
     showDialog(
       context: context,
@@ -2439,8 +2556,12 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                   .collection('user_books')
                   .doc(userBookId)
                   .update({'format': 'Digital'});
-              if (dialogContext.mounted) Navigator.pop(dialogContext);
-              if (mounted) setState(() => _mostrandoDialogoFormato = false);
+              if (dialogContext.mounted) {
+                Navigator.pop(dialogContext);
+              }
+              if (mounted) {
+                setState(() => _mostrandoDialogoFormato = false);
+              }
             },
             child: const Text("Digital 📱"),
           ),
@@ -2453,13 +2574,32 @@ class _DetalleClubPageState extends State<DetalleClubPage> {
                     'format': 'Papel',
                     'totalPages': totalPaginas > 0 ? totalPaginas : 0,
                   });
-              if (dialogContext.mounted) Navigator.pop(dialogContext);
-              if (mounted) setState(() => _mostrandoDialogoFormato = false);
+              if (dialogContext.mounted) {
+                Navigator.pop(dialogContext);
+              }
+              if (mounted) {
+                setState(() => _mostrandoDialogoFormato = false);
+              }
             },
             child: const Text("Papel 📖"),
           ),
         ],
       ),
     );
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // HELPERS DE UTILIDAD
+  // ─────────────────────────────────────────────────────────────
+
+  /// Convierte `Timestamp` o `DateTime` a string formato corto: `dd/mm/aaaa`.
+  String formatearFechaCorta(dynamic timestamp) {
+    if (timestamp == null) {
+      return '';
+    }
+    final DateTime date = (timestamp is Timestamp)
+        ? timestamp.toDate()
+        : timestamp;
+    return "${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}";
   }
 }

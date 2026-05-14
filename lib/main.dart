@@ -1,39 +1,64 @@
-import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:tintaviva/firebase_options.dart';
 import 'package:tintaviva/pages/login_page.dart';
 import 'package:tintaviva/pages/splash_page.dart';
 import 'package:tintaviva/theme/app_styles.dart';
-import 'firebase_options.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-/// Punto de entrada principal de la aplicacion TintAviva.
+/// Punto de entrada principal de la aplicación TintAviva.
 ///
-/// Inicializa Firebase y lanza el widget raiz.
-/// El orden es importante:
-/// 1. WidgetsFlutterBinding.ensureInitialized() - Prepara el entorno Flutter
-/// 2. Firebase.initializeApp() - Configura Firebase con las opciones de plataforma
-/// 3. runApp() - Inicia la aplicacion
+/// Flujo de inicialización (orden crítico):
+/// 1. `WidgetsFlutterBinding.ensureInitialized()` - Prepara el entorno Flutter para operaciones asíncronas
+/// 2. `dotenv.load(fileName: ".env")` - Carga variables de entorno (ej: `GOOGLE_BOOKS_API_KEY`)
+/// 3. `Firebase.initializeApp(options: ...)` - Configura Firebase con opciones específicas de plataforma
+/// 4. `runApp(const TintAvivaApp())` - Inicia el árbol de widgets de la aplicación
+///
+/// Nota sobre el orden:
+/// - `ensureInitialized()` debe llamarse antes de cualquier `await` en `main()`
+/// - `dotenv.load()` debe completarse antes de que cualquier servicio acceda a `dotenv.env`
+/// - `Firebase.initializeApp()` debe completarse antes de que cualquier widget use `FirebaseAuth` o `FirebaseFirestore`
+///
+/// Ejemplo de variables en `.env`:
+/// ```env
+/// GOOGLE_BOOKS_API_KEY=tu_api_key_aqui
+/// ```
 void main() async {
-  // Inicializar Flutter
+  // Inicializar Flutter para permitir operaciones asíncronas antes de runApp
   WidgetsFlutterBinding.ensureInitialized();
-  // Cargar el archivo .env
+
+  // Cargar el archivo .env para acceder a variables de entorno seguras
   await dotenv.load(fileName: ".env");
 
+  // Inicializar Firebase con las opciones generadas para la plataforma actual
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  // Inicia la app
+
+  // Inicia la aplicación con el widget raíz
   runApp(const TintAvivaApp());
 }
 
-/// Widget raiz de la aplicacion.
+/// Widget raíz de la aplicación TintAviva.
 ///
-/// Configuraciones globales:
-/// - Tema visual (colores, tipografias, formas de inputs y botones)
-/// - Rutas de navegacion
-/// - Debug banner deshabilitado
+/// Configuraciones globales aplicadas en este nivel:
+/// - **Tema visual**: colores corporativos (`AppColors.morado`, `AppColors.naranja`), tipografías, formas de inputs y botones
+/// - **Rutas de navegación**: definición de rutas nombradas para acceso directo (ej: `'/login'`)
+/// - **Debug banner**: deshabilitado con `debugShowCheckedModeBanner: false` para builds de producción
 ///
-/// Nota: El widget ShowCaseWidget que aparece comentado en el codigo original
-/// fue removido porque no esta importado. Si se necesita onboarding con tooltips,
-/// debe agregarse la dependencia y envolver el MaterialApp.
+/// Estructura del tema (`ThemeData`):
+/// - `primaryColor`: Color principal para widgets que usan el tema primario
+/// - `scaffoldBackgroundColor`: Fondo por defecto para todas las pantallas (`Scaffold`)
+/// - `colorScheme`: Esquema de colores derivado de `seedColor` para consistencia en componentes Material 3
+/// - `appBarTheme`: Estilo unificado para todas las `AppBar` de la aplicación
+/// - `inputDecorationTheme`: Estilo base para todos los `TextField` y `TextFormField`
+/// - `elevatedButtonTheme`: Estilo base para todos los `ElevatedButton`
+///
+/// Navegación:
+/// - Pantalla inicial: `SplashPage` (maneja redirección a `OnboardingPage`, `LoginPage` o `HomePage`)
+/// - Rutas nombradas: `'/login'` → `LoginPage` (para redirecciones programáticas)
+///
+/// Nota sobre `ShowCaseWidget`:
+/// Si en el futuro se necesita onboarding con tooltips guiados, se puede envolver `MaterialApp`
+/// con `ShowCaseWidget` tras agregar la dependencia `showcaseview` en `pubspec.yaml`.
 class TintAvivaApp extends StatelessWidget {
   const TintAvivaApp({super.key});
 
@@ -46,6 +71,7 @@ class TintAvivaApp extends StatelessWidget {
         primaryColor: AppColors.morado,
         scaffoldBackgroundColor: AppColors.fondoClaro,
 
+        // Esquema de colores derivado para consistencia en componentes Material 3
         colorScheme: ColorScheme.fromSeed(
           seedColor: AppColors.morado,
           primary: AppColors.morado,
@@ -53,7 +79,7 @@ class TintAvivaApp extends StatelessWidget {
           surface: AppColors.fondoClaro,
         ),
 
-        // Estilo unificado para AppBars
+        // Estilo unificado para AppBars en toda la aplicación
         appBarTheme: const AppBarTheme(
           backgroundColor: Colors.white,
           foregroundColor: AppColors.morado,
@@ -66,7 +92,7 @@ class TintAvivaApp extends StatelessWidget {
           ),
         ),
 
-        // Estilo por defecto para TextFields
+        // Estilo por defecto para TextFields: bordes redondeados, colores corporativos
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: Colors.white,
@@ -81,7 +107,7 @@ class TintAvivaApp extends StatelessWidget {
           labelStyle: const TextStyle(color: AppColors.morado),
         ),
 
-        // Estilo por defecto para ElevatedButtons
+        // Estilo por defecto para ElevatedButtons: naranja, texto blanco, bordes redondeados
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.naranja,
@@ -94,10 +120,10 @@ class TintAvivaApp extends StatelessWidget {
         ),
       ),
 
-      // Pantalla inicial: Splash screen
+      // Pantalla inicial: SplashPage maneja la lógica de redirección según estado de usuario
       home: const SplashPage(),
 
-      // Rutas nombradas para navegacion
+      // Rutas nombradas para navegación programática (ej: tras logout)
       routes: {'/login': (context) => const LoginPage()},
     );
   }

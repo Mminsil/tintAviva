@@ -2,43 +2,71 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:tintaviva/services/database.dart';
 import 'package:tintaviva/theme/app_styles.dart';
-import 'package:tintaviva/utils/ui_helpers.dart';
-import '../../services/database.dart';
+import 'package:tintaviva/utils/dialogos_helpers.dart';
 
-/// Dialogo modal para crear un nuevo club de lectura.
+/// Diálogo modal para crear un nuevo club de lectura.
 ///
 /// Flujo completo:
-/// 1. Ingresar nombre, descripcion, libro (por busqueda o manual), autor, imagen del club (opcional)
-/// 2. Seleccionar libro via busqueda en catalogo (Google Books) o escribir manualmente
-/// 3. Si el libro ya fue leido por el usuario, muestra advertencia (al crearlo se reiniciara progreso)
-/// 4. Al guardar, llama a DatabaseService.crearClub que crea el documento en Firestore
+/// 1. Ingresar nombre, descripción, libro (por búsqueda o manual), autor, imagen del club (opcional)
+/// 2. Seleccionar libro vía búsqueda en catálogo (Google Books) o escribir manualmente
+/// 3. Si el libro ya fue leído por el usuario, muestra advertencia (al crearlo se reiniciará progreso)
+/// 4. Al guardar, llama a `DatabaseService.crearClub` que crea el documento en Firestore
+///
+/// Características:
+/// - Búsqueda híbrida: catálogo local + Google Books API vía `mostrarDialogoBusquedaLibros`
+/// - Validación condicional: autor obligatorio solo para libros manuales
+/// - Prevención de relectura no intencional: confirma si el usuario ya terminó el libro
+/// - Generación de `bookId` único vía `DatabaseService.generarBookId`
+///
+/// Ejemplo de uso:
+/// ```dart
+/// // En ClubesPage, desde el SpeedDial:
+/// showDialog(
+///   context: context,
+///   builder: (context) => const DialogoCrearClub(),
+/// )
+/// ```
 class DialogoCrearClub extends StatefulWidget {
   const DialogoCrearClub({super.key});
+
   @override
   State<DialogoCrearClub> createState() => _DialogoCrearClubState();
 }
 
 class _DialogoCrearClubState extends State<DialogoCrearClub> {
-  final _formKey = GlobalKey<FormState>();
+  /// Clave para el `Form` que permite validar todos los campos del formulario.
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+
+  /// Controladores para los campos de texto del formulario.
   final TextEditingController _nombreController = TextEditingController();
   final TextEditingController _descripcionController = TextEditingController();
   final TextEditingController _libroController = TextEditingController();
   final TextEditingController _autorController = TextEditingController();
   final TextEditingController _clubImageUrlController = TextEditingController();
 
+  /// Portada del libro seleccionada desde el catálogo (URL de imagen).
   String? _portadaSeleccionado;
+
+  /// ID del libro en la colección `'books'` si viene del catálogo.
+  /// Si es `null`, el libro se considera "manual" (escrito por el usuario).
   String? _bookIdSeleccionado;
+
+  /// URL de imagen personalizada para el club (opcional).
   String? _customClubImageUrl;
+
+  /// Límite de miembros para el club (rango: 2-20, por defecto: 5).
   int _maxMiembros = 5;
 
-  // Datos globales del libro seleccionado desde el catalogo
+  /// Datos adicionales del libro seleccionados desde el catálogo global.
   String? _isbnGlobal;
   String? _sinopsisGlobal;
   int? _pagesGlobal;
 
   @override
   void dispose() {
+    // Liberar controladores para evitar fugas de memoria
     _nombreController.dispose();
     _descripcionController.dispose();
     _libroController.dispose();
@@ -46,6 +74,10 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
     _clubImageUrlController.dispose();
     super.dispose();
   }
+
+  // ─────────────────────────────────────────────────────────────
+  // BUILD: UI DEL DIÁLOGO
+  // ─────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -81,7 +113,7 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
               ),
               const SizedBox(height: 15),
 
-              // Campo de libro con boton de busqueda y boton de limpieza condicional
+              // Campo de libro con botón de búsqueda y botón de limpieza condicional
               TextFormField(
                 controller: _libroController,
                 decoration: InputDecoration(
@@ -95,12 +127,14 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
                   suffixIcon: _libroController.text.isNotEmpty
                       ? IconButton(
                           icon: const Icon(Icons.clear),
-                          onPressed: () => setState(() {
-                            _libroController.clear();
-                            _autorController.clear();
-                            _bookIdSeleccionado = null;
-                            _portadaSeleccionado = null;
-                          }),
+                          onPressed: () {
+                            setState(() {
+                              _libroController.clear();
+                              _autorController.clear();
+                              _bookIdSeleccionado = null;
+                              _portadaSeleccionado = null;
+                            });
+                          },
                         )
                       : null,
                   border: OutlineInputBorder(
@@ -116,12 +150,14 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
                     : null,
                 onChanged: (value) {
                   if (_bookIdSeleccionado != null) {
-                    setState(() => _bookIdSeleccionado = null);
+                    setState(() {
+                      _bookIdSeleccionado = null;
+                    });
                   }
                 },
               ),
 
-              // Mensaje condicional: si el libro viene del catalogo o es manual
+              // Mensaje condicional: si el libro viene del catálogo o es manual
               if (_bookIdSeleccionado == null)
                 Padding(
                   padding: const EdgeInsets.only(top: 4, left: 4),
@@ -154,7 +190,7 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
                 ),
               const SizedBox(height: 15),
 
-              // Campo autor: readonly si viene del catalogo
+              // Campo autor: readonly si viene del catálogo
               TextFormField(
                 controller: _autorController,
                 readOnly: _bookIdSeleccionado != null,
@@ -228,7 +264,7 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
                         BoxShadow(
                           color: Colors.black12,
                           blurRadius: 4,
-                          offset: Offset(0, 2),
+                          offset: const Offset(0, 2),
                         ),
                       ],
                       image: DecorationImage(
@@ -249,7 +285,7 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
               ),
               const SizedBox(height: 15),
 
-              // Selector de limite de miembros (2 a 20)
+              // Selector de límite de miembros (2 a 20)
               DropdownButtonFormField<int>(
                 initialValue: _maxMiembros,
                 decoration: _inputDecoration("Límite de miembros"),
@@ -261,7 +297,11 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
                       ),
                     )
                     .toList(),
-                onChanged: (val) => setState(() => _maxMiembros = val!),
+                onChanged: (val) {
+                  setState(() {
+                    _maxMiembros = val!;
+                  });
+                },
               ),
               const SizedBox(height: 25),
 
@@ -302,7 +342,25 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
     );
   }
 
-  /// Campo de texto reutilizable con configuracion comun.
+  // ─────────────────────────────────────────────────────────────
+  // HELPERS DE UI
+  // ─────────────────────────────────────────────────────────────
+
+  /// Campo de texto reutilizable con configuración común.
+  ///
+  /// Parámetros:
+  /// - [controller]: `TextEditingController` para el campo
+  /// - [label]: Texto de la etiqueta (`InputDecoration.labelText`)
+  /// - [hint]: Texto de ayuda opcional (`InputDecoration.hintText`)
+  /// - [icon]: Icono opcional para el suffix (se muestra en color `AppColors.morado`)
+  /// - [maxLines]: Número de líneas del campo (por defecto: 1)
+  /// - [keyboardType]: Tipo de teclado (por defecto: `null` = texto)
+  /// - [validator]: Función de validación para `TextFormField.validator`
+  /// - [onTap]: Callback opcional para hacer el campo `readOnly` y abrir selector externo
+  /// - [onChanged]: Callback opcional para reaccionar a cambios en el texto
+  ///
+  /// Retorna:
+  /// - `TextFormField` configurado con estilos de `AppInputStyles` vía `_inputDecoration`
   Widget _buildTextField({
     required TextEditingController controller,
     required String label,
@@ -331,7 +389,19 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
     );
   }
 
-  /// Decoracion base para inputs.
+  /// Decoración base para inputs con estilos corporativos.
+  ///
+  /// Características:
+  /// - Label en `AppColors.morado` con `FontWeight.w500`
+  /// - Bordes redondeados (`borderRadius: 10`)
+  /// - Borde enfocado: `AppColors.naranja` con `width: 2` para feedback visual
+  /// - Borde por defecto: `Colors.grey.shade300`
+  ///
+  /// Parámetros:
+  /// - [label]: Texto de la etiqueta
+  ///
+  /// Retorna:
+  /// - `InputDecoration` listo para usar o personalizar con `.copyWith`
   InputDecoration _inputDecoration(String label) {
     return InputDecoration(
       labelText: label,
@@ -351,18 +421,45 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
     );
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // LÓGICA DE NEGOCIO: VALIDACIÓN Y GUARDADO
+  // ─────────────────────────────────────────────────────────────
+
   /// Valida los campos y guarda el club en Firestore.
   ///
-  /// Casos especiales:
-  /// - Si el libro es manual (no viene del catalogo), el autor es obligatorio
-  /// - Si el usuario ya leyo el libro, muestra advertencia (el progreso se reiniciara)
-  /// - Genera bookId mediante DatabaseService.generarBookId()
+  /// Flujo detallado:
+  /// 1. Valida el formulario con `_formKey.currentState!.validate()`
+  /// 2. Validación adicional: autor requerido para libros manuales (`_bookIdSeleccionado == null`)
+  /// 3. Genera `bookId` único vía `DatabaseService.generarBookId` (prioriza ISBN si existe)
+  /// 4. Si el libro viene del catálogo (`_bookIdSeleccionado != null`):
+  ///    - Consulta `user_books` para verificar si el usuario ya tiene este libro
+  ///    - Si existe y `shelf == 'Leído'` → muestra diálogo de confirmación de relectura
+  ///    - Si el usuario cancela → aborta el flujo
+  /// 5. Llama a `DatabaseService.crearClub` con todos los parámetros
+  /// 6. Muestra feedback con `SnackBar` y cierra el diálogo
+  ///
+  /// Manejo de errores:
+  /// - Verifica `mounted` antes de navegar o mostrar `SnackBar` para evitar errores si el widget fue destruido
+  /// - Propaga excepciones de Firestore con mensaje amigable
+  ///
+  /// Parámetros enviados a `DatabaseService.crearClub`:
+  /// - `nombre`, `descripcion`, `libro`, `autorLibro`: datos del formulario
+  /// - `portadaLibro`: URL de portada del catálogo o cadena vacía
+  /// - `bookId`: generado o del catálogo
+  /// - `maxMiembros`: valor del dropdown (2-20)
+  /// - `status`: `'activo'` por defecto
+  /// - `clubImageUrl`: URL personalizada o `null`
+  /// - `isbn`, `sinopsis`, `pages`: datos adicionales del catálogo o valores por defecto
   void _validarYGuardar() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
 
-    // Validacion adicional: autor requerido para libros manuales
+    // Validación adicional: autor requerido para libros manuales
     if (_bookIdSeleccionado == null && _autorController.text.trim().isEmpty) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -375,13 +472,13 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
       return;
     }
 
-    String bookIdParaGuardar = DatabaseService.generarBookId(
+    final String bookIdParaGuardar = DatabaseService.generarBookId(
       titulo: _libroController.text.trim(),
       autor: _autorController.text.trim(),
       isbn: _isbnGlobal ?? '',
     );
 
-    // Verificar si el usuario ya leyo este libro
+    // Verificar si el usuario ya leyó este libro
     final user = FirebaseAuth.instance.currentUser;
     if (user != null && _bookIdSeleccionado != null) {
       final userBookSnapshot = await FirebaseFirestore.instance
@@ -391,21 +488,23 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
           .limit(1)
           .get();
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       if (userBookSnapshot.docs.isNotEmpty) {
         final bookData = userBookSnapshot.docs.first.data();
-        final shelf = bookData['shelf'] ?? '';
+        final String shelf = bookData['shelf'] ?? '';
         final dateFinished = bookData['dateFinished'];
 
-        // Si el libro esta marcado como Leido, mostrar advertencia
+        // Si el libro está marcado como Leído, mostrar advertencia
         if (shelf == 'Leído' && dateFinished != null) {
           final DateTime fechaFin = (dateFinished as Timestamp).toDate();
           final String fechaFormateada = DateFormat(
             'dd/MM/yyyy',
           ).format(fechaFin);
 
-          final confirmar = await showDialog<bool>(
+          final bool? confirmar = await showDialog<bool>(
             context: context,
             builder: (dialogContext) => AlertDialog(
               title: const Text("📚 Libro ya leído"),
@@ -448,8 +547,12 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
             ),
           );
 
-          if (!mounted) return;
-          if (confirmar != true) return;
+          if (!mounted) {
+            return;
+          }
+          if (confirmar != true) {
+            return;
+          }
         }
       }
     }
@@ -469,16 +572,31 @@ class _DialogoCrearClubState extends State<DialogoCrearClub> {
         sinopsis: _sinopsisGlobal ?? '',
         pages: _pagesGlobal,
       );
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       Navigator.of(context).pop();
       mostrarSnackBar(context, "¡Club creado exitosamente!", AppColors.naranja);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       mostrarSnackBar(context, "Error al crear el club: $e", Colors.red);
     }
   }
 
-  /// Abre el dialog de busqueda de libros (Google Books) y aplica el resultado al formulario.
+  /// Abre el diálogo de búsqueda de libros (Google Books) y aplica el resultado al formulario.
+  ///
+  /// Flujo:
+  /// 1. Llama a `mostrarDialogoBusquedaLibros(context)` que devuelve `Map<String, dynamic>?`
+  /// 2. Si el usuario selecciona un libro y el widget sigue montado:
+  ///    - Actualiza `_libroController` y `_autorController` con los datos seleccionados
+  ///    - Guarda `_bookIdSeleccionado` para marcar el libro como "verificado"
+  ///    - Guarda `_portadaSeleccionado`, `_isbnGlobal`, `_sinopsisGlobal`, `_pagesGlobal` para enviar a `DatabaseService.crearClub`
+  /// 3. Si el usuario cancela o no hay resultado: no hace nada
+  ///
+  /// Nota: Los campos de libro y autor quedan en modo "readonly" visualmente cuando `_bookIdSeleccionado != null`,
+  /// pero el usuario puede limpiarlos con el botón `Icons.clear` para escribir manualmente.
   void _mostrarBusquedaLibrosParaClub() async {
     final resultado = await mostrarDialogoBusquedaLibros(context);
     if (resultado != null && mounted) {

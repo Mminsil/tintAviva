@@ -1,25 +1,90 @@
 import 'package:flutter/material.dart';
 import 'package:tintaviva/pages/detalle_libro_page.dart';
-import 'package:tintaviva/utils/ui_helpers.dart';
 import 'package:tintaviva/theme/app_styles.dart';
+import 'package:tintaviva/utils/dialogos_helpers.dart';
+import 'package:tintaviva/utils/ui_helpers.dart';
+import 'package:tintaviva/widgets/app_book_cover.dart';
 
-/// Tarjeta reutilizable para mostrar un libro con su progreso y opciones de edicion rapida.
+/// Tarjeta reutilizable para mostrar un libro con su progreso y opciones de edición rápida.
 ///
 /// Usos principales:
-/// 1. MiBibliotecaPage: lista de libros en biblioteca personal
-/// 2. DetalleClubPage: muestra el libro actual del club con borde de color distintivo
+/// 1. `MiBibliotecaPage`: lista de libros en biblioteca personal (borde naranja)
+/// 2. `DetalleClubPage`: muestra el libro actual del club (borde morado)
 ///
-/// Caracteristicas:
-/// - Muestra portada, titulo, autor y barra de progreso adaptativa (Papel/Digital)
-/// - Navegacion al detalle del libro al tocar la tarjeta
-/// - Menu contextual (tres puntos) con opciones:
-///   - Editar progreso (abre DialogoEdicionRapida)
-///   - Guardar cita (abre dialogo para agregar cita)
-/// - Borde de color: naranja para biblioteca personal, morado para clubes
+/// Características visuales:
+/// - Portada con sombra y bordes redondeados (`AppBookCover`)
+/// - Título (2 líneas máx.) y autor (1 línea) con `TextOverflow.ellipsis`
+/// - Barra de progreso adaptativa (`WidgetBarraProgreso`):
+///   - `'Digital'`: muestra `"{progress}% leído"`
+///   - `'Papel'`: muestra `"Pág. X de Y (progress%)"`
+/// - Borde de color: `AppColors.naranja` (personal) | `AppColors.morado` (club)
+/// - Sombra sutil para profundidad visual
+///
+/// Interacciones:
+/// - **Tap en tarjeta**: navega a `DetalleLibroPage` o ejecuta `onTapCustom`
+/// - **Botón editar** (`Icons.edit_note`): abre `abrirDialogoEdicionRapida`
+///
+/// Estructura de datos esperada en `libroData`:
+/// ```dart
+/// {
+///   'title': String,        // Título del libro
+///   'author': String,       // Autor del libro
+///   'bookCover': String?,   // URL de portada (puede ser null)
+///   'bookId': String,       // ID del libro en colección 'books'
+///   'progress': int,        // Porcentaje de progreso (0-100)
+///   'currentPage': int,     // Página actual (solo relevante para 'Papel')
+///   'totalPages': int,      // Total de páginas del libro
+///   'format': String,       // 'Digital' | 'Papel'
+/// }
+/// ```
+///
+/// Ejemplo de uso:
+/// ```dart
+/// // En MiBibliotecaPage:
+/// TarjetaLibroProgreso(
+///   docId: doc.id,
+///   libroData: libro,
+///   esClub: false, // Borde naranja
+/// )
+///
+/// // En DetalleClubPage:
+/// TarjetaLibroProgreso(
+///   docId: userBookDoc.id,
+///   libroData: userBookData,
+///   esClub: true, // Borde morado
+/// )
+/// ```
 class TarjetaLibroProgreso extends StatelessWidget {
+  /// ID del documento en la colección `'user_books'`.
+  ///
+  /// Usado para:
+  /// - Navegación a `DetalleLibroPage(userBookId: docId)`
+  /// - Actualizar progreso vía `abrirDialogoEdicionRapida(context, docId, ...)`
   final String docId;
+
+  /// Mapa con los datos del libro a mostrar.
+  ///
+  /// Debe contener las claves documentadas en la descripción de la clase.
+  /// Valores `null` se manejan con fallbacks visuales (`'Sin título'`, `'Autor desconocido'`, etc.)
   final Map<String, dynamic> libroData;
+
+  /// Callback opcional para personalizar la navegación al tocar la tarjeta.
+  ///
+  /// Si se proporciona, se ejecuta en lugar de la navegación por defecto a `DetalleLibroPage`.
+  ///
+  /// Caso de uso típico:
+  /// - En `DetalleClubPage`, para navegar a `DetalleClubPage` en lugar de `DetalleLibroPage`
+  ///   cuando el libro pertenece a un club.
   final VoidCallback? onTapCustom;
+
+  /// Indica si la tarjeta representa un libro de club.
+  ///
+  /// Efecto visual:
+  /// - `false` (por defecto): borde `AppColors.naranja.withValues(alpha: 0.8)`
+  /// - `true`: borde `AppColors.morado.withValues(alpha: 0.8)`
+  ///
+  /// Propósito:
+  /// - Diferenciar visualmente libros personales vs. libros de club en listas mixtas
   final bool esClub;
 
   const TarjetaLibroProgreso({
@@ -56,6 +121,7 @@ class TarjetaLibroProgreso extends StatelessWidget {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         color: Colors.transparent,
         child: InkWell(
+          // Navegación: usa onTapCustom si existe, sino navega a DetalleLibroPage por defecto
           onTap:
               onTapCustom ??
               () {
@@ -75,7 +141,7 @@ class TarjetaLibroProgreso extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Portada del libro
+                // Portada del libro con sombra y AppBookCover para fallback automático
                 Container(
                   width: 70,
                   height: 105,
@@ -98,7 +164,7 @@ class TarjetaLibroProgreso extends StatelessWidget {
                 ),
                 const SizedBox(width: 15),
 
-                // Informacion del libro y barra de progreso
+                // Información del libro + barra de progreso
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -124,7 +190,7 @@ class TarjetaLibroProgreso extends StatelessWidget {
                       ),
                       const SizedBox(height: 12),
 
-                      // Barra de progreso adaptativa (Papel muestra paginas, Digital muestra porcentaje)
+                      // Barra de progreso adaptativa (Papel/Digital)
                       WidgetBarraProgreso(
                         progress: libroData['progress'] ?? 0,
                         currentPage: libroData['currentPage'] ?? 0,
@@ -137,6 +203,7 @@ class TarjetaLibroProgreso extends StatelessWidget {
                   ),
                 ),
 
+                // Botón de edición rápida de progreso
                 IconButton(
                   icon: Icon(
                     Icons.edit_note,

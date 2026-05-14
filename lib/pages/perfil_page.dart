@@ -1,21 +1,23 @@
-import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import 'package:tintaviva/pages/onboarding_page.dart';
 import 'package:tintaviva/theme/app_styles.dart';
-import 'package:tintaviva/utils/ui_helpers.dart';
+import 'package:tintaviva/utils/dialogos_helpers.dart';
 import 'package:tintaviva/utils/streak_helper.dart';
 
 /// Página de perfil del usuario.
 ///
 /// Muestra:
-/// 1. Datos personales y avatar del usuario.
-/// 2. Racha de lectura actual (gamificación).
-/// 3. Estadísticas globales de estanterías (Leídos, Leyendo, Por leer).
-/// 4. Estadísticas temporales (libros leídos este mes/año).
-/// 5. Acciones de cuenta (Cerrar sesión / Eliminar cuenta).
+/// 1. Datos personales y avatar del usuario (foto, nombre, email)
+/// 2. Racha de lectura actual (gamificación con `StreakHelper`)
+/// 3. Estadísticas globales de estanterías: `'Leídos'`, `'Leyendo'`, `'Por leer'`
+/// 4. Estadísticas temporales: libros leídos este mes/año (cálculo en cliente)
+/// 5. Acciones de cuenta: cerrar sesión / eliminar cuenta permanentemente
 ///
-/// Característica técnica: Usa AutomaticKeepAliveClientMixin para preservar
-/// el estado de esta página cuando el usuario navega entre pestañas en HomePage.
+/// Característica técnica:
+/// - Usa `AutomaticKeepAliveClientMixin` para preservar el estado al cambiar de pestaña en `HomePage`
+/// - Escucha cambios en tiempo real en `users/{uid}` con `StreamBuilder`
 class PerfilPage extends StatefulWidget {
   const PerfilPage({super.key});
 
@@ -26,13 +28,16 @@ class PerfilPage extends StatefulWidget {
 class _PerfilPageState extends State<PerfilPage>
     with AutomaticKeepAliveClientMixin {
   /// Indica a Flutter que debe preservar el estado de este widget cuando se oculta.
+  ///
   /// Esto evita que la página se reconstruya cada vez que el usuario cambia de pestaña,
-  /// manteniendo así la racha de lectura y los datos cargados en memoria.
+  /// manteniendo en memoria: la racha de lectura, los datos cargados y el scroll.
   @override
   bool get wantKeepAlive => true;
 
-  // Variables de estado para la racha de lectura.
+  /// Días consecutivos de lectura actuales del usuario.
   int _streak = 0;
+
+  /// Controla si la racha está cargándose para mostrar loading.
   bool _isLoadingStreak = true;
 
   @override
@@ -42,10 +47,12 @@ class _PerfilPageState extends State<PerfilPage>
     _loadStreak();
   }
 
-  /// Carga la racha de lectura actual desde StreakHelper y actualiza la UI.
+  /// Carga la racha de lectura actual desde `StreakHelper` y actualiza la UI.
+  ///
+  /// Verifica `mounted` antes de llamar a `setState` para evitar errores si el widget
+  /// fue destruido durante la operación asíncrona.
   Future<void> _loadStreak() async {
     final streak = await StreakHelper.getCurrentStreak();
-    // Verificamos que el widget siga montado antes de actualizar el estado.
     if (mounted) {
       setState(() {
         _streak = streak;
@@ -54,256 +61,170 @@ class _PerfilPageState extends State<PerfilPage>
     }
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // BUILD PRINCIPAL (ÍNDICE LEGIBLE)
+  // ─────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
-    // Llamada obligatoria cuando se usa AutomaticKeepAliveClientMixin.
+    // Llamada obligatoria cuando se usa `AutomaticKeepAliveClientMixin`.
     super.build(context);
 
     final user = FirebaseAuth.instance.currentUser;
 
     return Scaffold(
       backgroundColor: AppColors.fondoClaro,
-      // Stream principal: Escucha cambios en los datos del usuario en Firestore.
-      body: StreamBuilder<DocumentSnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('users')
-            .doc(user?.uid)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
+      body: _buildBody(user),
+    );
+  }
 
-          final userData = snapshot.data!.data() as Map<String, dynamic>?;
-          final stats =
-              userData?['stats'] ?? {'read': 0, 'inProgress': 0, 'toRead': 0};
-          final String? photoUrl = userData?['photoURL'];
+  // ─────────────────────────────────────────────────────────────
+  // WIDGETS AUXILIARES DE UI (EXTRAÍDOS DEL BUILD)
+  // ─────────────────────────────────────────────────────────────
 
-          // Detectamos si la foto es un asset local o una URL remota.
-          bool esAsset = photoUrl != null && photoUrl.contains('assets/');
+  /// Construye el cuerpo principal con `StreamBuilder` para datos del usuario.
+  ///
+  /// Escucha cambios en tiempo real en `users/{uid}` y renderiza:
+  /// - Estado de carga
+  /// - Perfil completo: avatar, nombre, email, racha, estadísticas y acciones
+  Widget _buildBody(User? user) {
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(user?.uid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
 
-          return SingleChildScrollView(
-            child: Column(
-              children: [
-                const SizedBox(height: 60),
+        final userData = snapshot.data!.data() as Map<String, dynamic>?;
+        final stats =
+            userData?['stats'] ?? {'read': 0, 'inProgress': 0, 'toRead': 0};
+        final String? photoUrl = userData?['photoURL'];
+        final bool esAsset = photoUrl != null && photoUrl.contains('assets/');
 
-                // --- AVATAR DEL USUARIO ---
-                Center(
-                  child: CircleAvatar(
-                    radius: 60,
-                    backgroundColor: AppColors.morado.withValues(alpha: 0.1),
-                    // Lógica condicional para cargar imagen local o de red.
-                    backgroundImage: photoUrl != null && photoUrl.isNotEmpty
-                        ? (esAsset
-                              ? AssetImage(photoUrl) as ImageProvider
-                              : NetworkImage(photoUrl))
-                        : null,
-                    // Icono por defecto si no hay foto.
-                    child: (photoUrl == null || photoUrl.isEmpty)
-                        ? const Icon(
-                            Icons.person,
-                            size: 60,
-                            color: AppColors.morado,
-                          )
-                        : null,
-                  ),
-                ),
-                const SizedBox(height: 15),
-                Text(
-                  userData?['name'] ?? 'Usuario',
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textoNegroSuave,
-                  ),
-                ),
-                Text(
-                  user?.email ?? '',
-                  style: TextStyle(color: Colors.grey[600]),
-                ),
-                const SizedBox(height: 30),
+        return SingleChildScrollView(
+          child: Column(
+            children: [
+              const SizedBox(height: 60),
+              _buildUserAvatar(photoUrl, esAsset),
+              const SizedBox(height: 15),
+              _buildUserName(userData),
+              _buildUserEmail(user),
+              const SizedBox(height: 30),
+              _buildStreakCard(),
+              const SizedBox(height: 30),
+              _buildSectionHeader('Mis Estanterías'),
+              const SizedBox(height: 15),
+              _buildContenedorActividad(stats),
+              const SizedBox(height: 30),
+              _buildSectionHeader('Este periodo'),
+              const SizedBox(height: 15),
+              _buildTemporalStatsStream(user),
+              const SizedBox(height: 50),
+              _buildAccountActions(),
+              const SizedBox(height: 40),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
-                // --- RACHA DE LECTURA (Gamificación) ---
-                Card(
-                  color: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(15),
-                  ),
-                  elevation: 4,
-                  margin: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 20,
-                      horizontal: 16,
-                    ),
-                    child: _isLoadingStreak
-                        ? const Center(child: CircularProgressIndicator())
-                        : Column(
-                            children: [
-                              // Icono dinámico: naranja si hay racha, gris si no.
-                              Icon(
-                                Icons.emoji_events,
-                                color: _streak > 0
-                                    ? Colors.orange
-                                    : Colors.grey[400],
-                                size: 60,
-                              ),
-                              const SizedBox(height: 10),
-                              // Número de días consecutivos leído.
-                              Text(
-                                _streak.toString(),
-                                style: TextStyle(
-                                  fontSize: 40,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.morado,
-                                ),
-                              ),
-                              const SizedBox(height: 5),
-                              // Mensaje motivacional dinámico según la longitud de la racha.
-                              Text(
-                                StreakHelper.getStreakMessage(_streak),
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  color: Colors.grey,
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
-                ),
-                const SizedBox(height: 30),
-
-                // --- MIS ESTANTERÍAS (Estadísticas globales) ---
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 25),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Mis Estanterías',
-                      style: AppTextStyles.sectionTitle,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 15),
-                _buildContenedorActividad(stats),
-                const SizedBox(height: 30),
-
-                // --- ESTADÍSTICAS TEMPORALES (Cálculo en cliente) ---
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 25),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Este periodo',
-                      style: AppTextStyles.sectionTitle,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 15),
-
-                // Stream secundario: Calcula libros leídos por mes/año filtrando por fecha.
-                StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('user_books')
-                      .where('userId', isEqualTo: user?.uid)
-                      .where('shelf', isEqualTo: 'Leído')
-                      .snapshots(),
-                  builder: (context, bookSnapshot) {
-                    int leidosMes = 0;
-                    int leidosAnio = 0;
-
-                    if (bookSnapshot.hasData) {
-                      final ahora = DateTime.now();
-                      // Iteramos sobre los documentos para filtrar por fecha manualmente.
-                      // Nota: Para grandes volúmenes de datos, esto podría optimizarse con consultas compuestas.
-                      for (var doc in bookSnapshot.data!.docs) {
-                        final data = doc.data() as Map<String, dynamic>;
-                        if (data['dateFinished'] != null) {
-                          DateTime fecha = (data['dateFinished'] as Timestamp)
-                              .toDate();
-                          if (fecha.year == ahora.year) {
-                            leidosAnio++;
-                            if (fecha.month == ahora.month) leidosMes++;
-                          }
-                        }
-                      }
-                    }
-
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: Row(
-                        children: [
-                          _tarjetaEstadisticaDetalle(
-                            "Este mes",
-                            "$leidosMes",
-                            Icons.calendar_month,
-                            AppColors.naranja,
-                          ),
-                          const SizedBox(width: 15),
-                          _tarjetaEstadisticaDetalle(
-                            "Este año",
-                            "$leidosAnio",
-                            Icons.auto_awesome,
-                            AppColors.morado,
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(height: 50),
-
-                // --- ACCIONES DE CUENTA ---
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 25),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () => _confirmarCerrarSesion(context),
-                      icon: const Icon(Icons.logout, color: Colors.white),
-                      label: const Text("Cerrar Sesión"),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.naranja,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(15),
-                        ),
-                        textStyle: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 15),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 25),
-                  child: TextButton(
-                    onPressed: () => _confirmarEliminarCuenta(context),
-                    child: const Text(
-                      "Dar de baja mi cuenta",
-                      style: TextStyle(
-                        color: Colors.red,
-                        decoration: TextDecoration.underline,
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 40),
-              ],
-            ),
-          );
-        },
+  /// Construye el avatar circular del usuario con lógica para imagen local o remota.
+  ///
+  /// - Si `photoUrl` contiene `'assets/'`: usa `AssetImage`
+  /// - Si es URL http/https: usa `NetworkImage`
+  /// - Si es null/vacío: muestra icono por defecto `Icons.person`
+  Widget _buildUserAvatar(String? photoUrl, bool esAsset) {
+    return Center(
+      child: CircleAvatar(
+        radius: 60,
+        backgroundColor: AppColors.morado.withValues(alpha: 0.1),
+        backgroundImage: photoUrl != null && photoUrl.isNotEmpty
+            ? (esAsset
+                  ? AssetImage(photoUrl) as ImageProvider
+                  : NetworkImage(photoUrl))
+            : null,
+        child: (photoUrl == null || photoUrl.isEmpty)
+            ? const Icon(Icons.person, size: 60, color: AppColors.morado)
+            : null,
       ),
     );
   }
 
-  // --- WIDGETS AUXILIARES DE UI ---
+  /// Construye el nombre del usuario con estilo de título.
+  Widget _buildUserName(Map<String, dynamic>? userData) {
+    return Text(
+      userData?['name'] ?? 'Usuario',
+      style: const TextStyle(
+        fontSize: 22,
+        fontWeight: FontWeight.bold,
+        color: AppColors.textoNegroSuave,
+      ),
+    );
+  }
+
+  /// Construye el email del usuario con estilo secundario.
+  Widget _buildUserEmail(User? user) {
+    return Text(user?.email ?? '', style: TextStyle(color: Colors.grey[600]));
+  }
+
+  /// Construye la tarjeta de racha de lectura con animación de carga.
+  Widget _buildStreakCard() {
+    return Card(
+      color: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      elevation: 4,
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+        child: _isLoadingStreak
+            ? const Center(child: CircularProgressIndicator())
+            : _buildStreakContent(),
+      ),
+    );
+  }
+
+  /// Construye el contenido de la racha cuando ya está cargada.
+  Widget _buildStreakContent() {
+    return Column(
+      children: [
+        Icon(
+          Icons.emoji_events,
+          color: _streak > 0 ? Colors.orange : Colors.grey[400],
+          size: 60,
+        ),
+        const SizedBox(height: 10),
+        Text(
+          _streak.toString(),
+          style: TextStyle(
+            fontSize: 40,
+            fontWeight: FontWeight.bold,
+            color: AppColors.morado,
+          ),
+        ),
+        const SizedBox(height: 5),
+        Text(
+          StreakHelper.getStreakMessage(_streak),
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 16, color: Colors.grey),
+        ),
+      ],
+    );
+  }
+
+  /// Construye el título de sección con estilo consistente.
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 25),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(title, style: AppTextStyles.sectionTitle),
+      ),
+    );
+  }
 
   /// Construye la tarjeta de estadísticas globales con borde naranja.
   Widget _buildContenedorActividad(Map<String, dynamic> stats) {
@@ -313,7 +234,6 @@ class _PerfilPageState extends State<PerfilPage>
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
-        // Borde decorativo naranja para diferenciar visualmente esta sección.
         border: Border.all(
           color: AppColors.naranja.withValues(alpha: 0.3),
           width: 1.5,
@@ -373,6 +293,7 @@ class _PerfilPageState extends State<PerfilPage>
     );
   }
 
+  /// Divider vertical para separar columnas de estadísticas.
   Widget _divider() => Container(height: 30, width: 1, color: Colors.grey[200]);
 
   /// Construye una tarjeta de estadística temporal con borde morado.
@@ -388,7 +309,6 @@ class _PerfilPageState extends State<PerfilPage>
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(20),
-          // Borde decorativo morado para diferenciar visualmente esta sección.
           border: Border.all(
             color: AppColors.morado.withValues(alpha: 0.3),
             width: 1.5,
@@ -423,9 +343,146 @@ class _PerfilPageState extends State<PerfilPage>
     );
   }
 
-  // --- LÓGICA DE GESTIÓN DE CUENTA ---
+  /// Construye el stream para estadísticas temporales (libros leídos este mes/año).
+  ///
+  /// Nota: El filtrado por fecha se hace en cliente iterando sobre los documentos.
+  /// Para grandes volúmenes de datos, esto podría optimizarse con consultas compuestas en Firestore.
+  Widget _buildTemporalStatsStream(User? user) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('user_books')
+          .where('userId', isEqualTo: user?.uid)
+          .where('shelf', isEqualTo: 'Leído')
+          .snapshots(),
+      builder: (context, bookSnapshot) {
+        int leidosMes = 0;
+        int leidosAnio = 0;
+
+        if (bookSnapshot.hasData) {
+          final ahora = DateTime.now();
+          for (var doc in bookSnapshot.data!.docs) {
+            final data = doc.data() as Map<String, dynamic>;
+            if (data['dateFinished'] != null) {
+              final DateTime fecha = (data['dateFinished'] as Timestamp)
+                  .toDate();
+              if (fecha.year == ahora.year) {
+                leidosAnio++;
+                if (fecha.month == ahora.month) {
+                  leidosMes++;
+                }
+              }
+            }
+          }
+        }
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(
+            children: [
+              _tarjetaEstadisticaDetalle(
+                "Este mes",
+                "$leidosMes",
+                Icons.calendar_month,
+                AppColors.naranja,
+              ),
+              const SizedBox(width: 15),
+              _tarjetaEstadisticaDetalle(
+                "Este año",
+                "$leidosAnio",
+                Icons.auto_awesome,
+                AppColors.morado,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Construye las acciones de cuenta: cerrar sesión y eliminar cuenta.
+  /// Construye las acciones de cuenta: ver guía, cerrar sesión y eliminar cuenta.
+  Widget _buildAccountActions() {
+    return Column(
+      children: [
+        //  Ver guía de nuevo
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 25),
+          child: SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => _volverAVerGuia(),
+              icon: const Icon(Icons.school, color: AppColors.morado),
+              label: const Text(
+                "Volver a ver la guía",
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.morado,
+                side: BorderSide(color: AppColors.morado, width: 1.5),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(15),
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 15),
+
+        // Botón cerrar sesión (ya existente)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 25),
+          child: SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () => _confirmarCerrarSesion(context),
+              icon: const Icon(Icons.logout, color: Colors.white),
+              label: const Text("Cerrar Sesión"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.naranja,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                textStyle: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 15),
+
+        // Botón eliminar cuenta (ya existente)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 25),
+          child: TextButton(
+            onPressed: () => _confirmarEliminarCuenta(context),
+            child: const Text(
+              "Dar de baja mi cuenta",
+              style: TextStyle(
+                color: Colors.red,
+                decoration: TextDecoration.underline,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // LÓGICA DE GESTIÓN DE CUENTA
+  // ─────────────────────────────────────────────────────────────
 
   /// Muestra diálogo de confirmación y cierra la sesión del usuario.
+  ///
+  /// Usa `pushNamedAndRemoveUntil` para eliminar todas las pantallas anteriores
+  /// y evitar que el usuario pueda volver al perfil tras el logout.
   void _confirmarCerrarSesion(BuildContext context) async {
     final bool? confirmar = await mostrarDialogoConfirmacion(
       context: context,
@@ -436,13 +493,23 @@ class _PerfilPageState extends State<PerfilPage>
     );
     if (confirmar == true) {
       await FirebaseAuth.instance.signOut();
-      if (!context.mounted) return;
-      // pushNamedAndRemoveUntil elimina todas las pantallas anteriores para evitar volver al perfil tras logout.
+      if (!context.mounted) {
+        return;
+      }
       Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
     }
   }
 
   /// Elimina permanentemente la cuenta del usuario y todos sus datos asociados.
+  ///
+  /// Proceso atómico:
+  /// 1. Elimina todos los documentos en `user_books` del usuario
+  /// 2. Elimina el documento en `users/{uid}`
+  /// 3. Elimina la cuenta en `FirebaseAuth`
+  ///
+  /// Manejo de errores:
+  /// - `requires-recent-login`: fuerza al usuario a re-autenticarse antes de borrar
+  /// - Otros errores: muestra mensaje genérico
   void _confirmarEliminarCuenta(BuildContext context) async {
     final bool? confirmar = await mostrarDialogoConfirmacion(
       context: context,
@@ -452,14 +519,18 @@ class _PerfilPageState extends State<PerfilPage>
       textoAccion: "Eliminar todo",
       colorAccion: Colors.red,
     );
-    if (confirmar != true || !context.mounted) return;
+    if (confirmar != true || !context.mounted) {
+      return;
+    }
 
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null) {
+      return;
+    }
 
     try {
       // 1. Eliminar todos los libros personales del usuario.
-      var books = await FirebaseFirestore.instance
+      final books = await FirebaseFirestore.instance
           .collection('user_books')
           .where('userId', isEqualTo: user.uid)
           .get();
@@ -474,11 +545,14 @@ class _PerfilPageState extends State<PerfilPage>
       // 3. Eliminar la cuenta de Firebase Auth.
       await user.delete();
 
-      if (!context.mounted) return;
+      if (!context.mounted) {
+        return;
+      }
       Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
     } on FirebaseAuthException catch (e) {
-      if (!context.mounted) return;
-      // Manejo del error común: requiere re-autenticación reciente para borrar cuenta.
+      if (!context.mounted) {
+        return;
+      }
       if (e.code == 'requires-recent-login') {
         mostrarSnackBar(
           context,
@@ -486,7 +560,9 @@ class _PerfilPageState extends State<PerfilPage>
           AppColors.naranja,
         );
         await FirebaseAuth.instance.signOut();
-        if (!context.mounted) return;
+        if (!context.mounted) {
+          return;
+        }
         Navigator.of(
           context,
         ).pushNamedAndRemoveUntil('/login', (route) => false);
@@ -494,8 +570,28 @@ class _PerfilPageState extends State<PerfilPage>
         mostrarSnackBar(context, "Error al eliminar: $e", Colors.red);
       }
     } catch (e) {
-      if (!context.mounted) return;
+      if (!context.mounted) {
+        return;
+      }
       mostrarSnackBar(context, "Ocurrió un error inesperado: $e", Colors.red);
     }
+  }
+
+  /// Navega a OnboardingPage para que el usuario vuelva a ver la guía.
+  void _volverAVerGuia() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => OnboardingPage(
+          // Callback que hace pop() para volver al perfil sin perder sesión
+          onComplete: () => Navigator.pop(context),
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
   }
 }
