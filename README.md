@@ -50,7 +50,7 @@ TintAviva es una aplicación móvil diseñada para lectores empedernidos que des
 |------|------------|
 | **Frontend** | Flutter 3.x (Dart) |
 | **Backend** | Firebase (Authentication, Cloud Firestore, Cloud Storage) |
-| **Estado** | Provider + StreamBuilder |
+| **Estado** | StatefulWidget (setState) + StreamBuilder para datos en tiempo real
 | **Testing** | `flutter_test` (unitarias + integración) |
 | **Control de versiones** | Git & GitHub |
 | **IDE** | Visual Studio Code / Android Studio |
