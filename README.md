@@ -44,6 +44,7 @@ TintAviva es una aplicación móvil para lectores que quieren gestionar sus libr
 
 - **Frontend**: Flutter 3.x (Dart)
 - **Backend**: Firebase (Auth, Firestore)
+- **Estados**: StatefulWidget (setState) + StreamBuilder para datos en tiempo real
 - **APIs**: Google Books API
 - **Utilidades**: `intl`, `confetti`, `flutter_dotenv`, `shared_preferences`
 - **Testing**: flutter_test

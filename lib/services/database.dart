@@ -26,45 +26,79 @@ class DatabaseService {
 
   /// Guarda un nuevo libro en la biblioteca del usuario y, si es necesario, en el catálogo global.
   ///
+  /// Soporta tres formatos:
+  /// - `'Papel'`: requiere `paginasTotales` y calcula progreso desde `paginaActual`
+  /// - `'Digital'`: usa `progreso` directamente (0-100)
+  /// - `'Audio'`: requiere `totalSeconds` y `currentSeconds`, calcula progreso automáticamente
+  ///
   /// Parámetros:
   /// - [titulo], [autor], [isbn]: Datos de identificación del libro.
   /// - [estanteria]: Estado inicial ('Leído', 'Leyendo', 'Por leer').
-  /// - [progreso]: Porcentaje de lectura (0-100).
+  /// - [progreso]: Porcentaje de lectura (0-100). Para Audio, se calcula internamente si se proporcionan los segundos.
   /// - [fechaInicio], [fechaFin]: Fechas de lectura (opcionales).
-  /// - [formato]: 'Papel' o 'Digital' (afecta cómo se calcula el progreso).
-  /// - [paginasTotalesFormulario], [paginaActual]: Datos específicos de formato papel.
+  /// - [formato]: 'Papel', 'Digital' o 'Audio'.
+  /// - [paginasTotalesFormulario], [paginaActual]: Datos específicos de formato Papel.
+  /// - [totalSeconds], [currentSeconds]: Duración total y progreso en segundos (solo para Audio).
   /// - [coverUrlFormulario], [sinopsis], [genero]: Metadatos adicionales.
   ///
   /// Lógica de unicidad:
-  /// 1. Genera un ID único basado en título+autor normalizados (ignora ISBN para evitar duplicados por ediciones).
+  /// 1. Genera un ID único basado en título+autor normalizados.
   /// 2. Verifica si el usuario ya tiene el libro en su biblioteca personal.
   /// 3. Si el libro no existe en el catálogo global ('books'), lo crea con los datos proporcionados.
   /// 4. Crea la entrada personal en 'user_books' vinculando al usuario y al libro global.
   /// 5. Actualiza las estadísticas del usuario (incremento atómico de contadores).
-  static Future<void> guardarLibroFirestore(
-    String titulo,
-    String autor,
-    String estanteria,
-    int progreso,
+  ///
+  /// Excepciones:
+  /// - Lanza `Exception` si el libro ya existe en la biblioteca del usuario.
+  /// - Lanza `Exception` si los tiempos de Audio son inválidos (actual > total o <= 0).
+  static Future<void> guardarLibroFirestore({
+    required String titulo,
+    required String autor,
+    required String estanteria,
+    required int progreso,
     DateTime? fechaInicio,
     DateTime? fechaFin,
-    String formato,
-    int paginasTotalesFormulario,
-    int paginaActual,
-    String coverUrlFormulario,
-    String isbn,
-    String sinopsis,
-    String genero,
-  ) async {
+    required String formato,
+    int paginasTotalesFormulario = 0,
+    int paginaActual = 0,
+    int? totalSeconds,
+    int? currentSeconds,
+    String coverUrlFormulario = '',
+    String isbn = '',
+    String sinopsis = '',
+    String genero = 'Sin género',
+  }) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
     try {
       // Normalización de estado: si el progreso es 100%, forzar estantería a 'Leído'.
       String estanteriaFinal = (progreso >= 100) ? 'Leído' : estanteria;
-      int progresoFinal = progreso > 100 ? 100 : progreso;
+      int progresoFinal = progreso.clamp(0, 100);
 
-      // Generar ID único e inmutable para el libro (usando normalización para consistencia).
+      // Validaciones específicas para formato Audio
+      if (formato == 'Audio') {
+        if (totalSeconds == null || currentSeconds == null) {
+          throw Exception(
+            "El formato Audio requiere totalSeconds y currentSeconds.",
+          );
+        }
+        if (totalSeconds <= 0) {
+          throw Exception("La duración total del audio debe ser mayor a 0.");
+        }
+        if (currentSeconds < 0 || currentSeconds > totalSeconds) {
+          throw Exception(
+            "El tiempo actual no puede ser negativo ni superar el total.",
+          );
+        }
+        // Recalcular progreso para Audio: (actual / total) * 100
+        progresoFinal = ((currentSeconds / totalSeconds) * 100).round().clamp(
+          0,
+          100,
+        );
+      }
+
+      // Generar ID único e inmutable para el libro.
       String bookId = DatabaseService.generarBookId(
         titulo: titulo,
         autor: autor,
@@ -76,15 +110,15 @@ class DatabaseService {
       final bookRef = _db.collection('books').doc(bookId);
       final userRef = _db.collection('users').doc(user.uid);
 
-      // 1. VERIFICAR DUPLICADO: El usuario no puede tener el mismo libro dos veces.
+      // 1. VERIFICAR DUPLICADO en biblioteca personal.
       final docSnapshot = await docRef.get();
       if (docSnapshot.exists) {
         throw Exception(
-          "El libro '${docSnapshot.data()?['title']}' ya está en tu biblioteca. ",
+          "El libro '${docSnapshot.data()?['title']}' ya está en tu biblioteca.",
         );
       }
 
-      // 2. VERIFICAR CATÁLOGO GLOBAL: ¿Existe ya este libro en la base de datos compartida?
+      // 2. VERIFICAR CATÁLOGO GLOBAL.
       final bookSnapshot = await bookRef.get();
       String globalCover = bookSnapshot.exists
           ? (bookSnapshot.data()?['bookCover'] ?? '')
@@ -92,15 +126,13 @@ class DatabaseService {
       int globalPages = bookSnapshot.exists
           ? ((bookSnapshot.data()?['pages'] ?? 0) as int)
           : 0;
-
       String globalGenero = bookSnapshot.exists
           ? (bookSnapshot.data()?['genre'] ?? 'Sin género')
           : genero;
 
-      // Iniciar batch atómico: todos los cambios siguientes se ejecutarán juntos o ninguno.
       final batch = _db.batch();
 
-      // Crear entrada en catálogo global SOLO si es un libro nuevo para toda la plataforma.
+      // Crear entrada en catálogo global SOLO si es nuevo.
       if (!bookSnapshot.exists) {
         Map<String, dynamic> nuevosDatosCatalogo = {
           'title': capitalizarTitulo(titulo.trim()),
@@ -110,12 +142,12 @@ class DatabaseService {
           'pages': paginasTotalesFormulario > 0 ? paginasTotalesFormulario : 0,
           'bookCover': coverUrlFormulario.isNotEmpty ? coverUrlFormulario : '',
           'genre': genero,
+          'createdAt': FieldValue.serverTimestamp(),
         };
         batch.set(bookRef, nuevosDatosCatalogo);
       }
 
-      // Crear entrada personal del usuario en 'user_books'.
-      // Prioridad de datos: si el usuario proporcionó portada, usar esa; sino, la del catálogo global.
+      // Preparar datos para user_books.
       String userCover = coverUrlFormulario.isNotEmpty
           ? coverUrlFormulario
           : globalCover;
@@ -123,14 +155,14 @@ class DatabaseService {
           ? paginasTotalesFormulario
           : globalPages;
 
-      batch.set(docRef, {
+      Map<String, dynamic> userBookData = {
         'userId': user.uid,
         'bookId': bookId,
         'title': capitalizarTitulo(titulo.trim()),
         'author': capitalizarAutor(autor.trim()),
         'bookCover': userCover,
         'shelf': estanteriaFinal,
-        'progress': progresoFinal.toInt(),
+        'progress': progresoFinal,
         'format': formato,
         'totalPages': userTotalPages,
         'currentPage': paginaActual,
@@ -141,9 +173,19 @@ class DatabaseService {
             ? (fechaFin ?? FieldValue.serverTimestamp())
             : null,
         'genre': globalGenero,
-      });
+      };
 
-      // Actualizar estadísticas del usuario: incrementar el contador de la estantería correspondiente.
+      // Añadir campos específicos de Audio si corresponde.
+      if (formato == 'Audio' &&
+          totalSeconds != null &&
+          currentSeconds != null) {
+        userBookData['totalSeconds'] = totalSeconds;
+        userBookData['currentSeconds'] = currentSeconds;
+      }
+
+      batch.set(docRef, userBookData);
+
+      // Actualizar estadísticas del usuario.
       String campoStats = "";
       if (estanteriaFinal == 'Leído') {
         campoStats = "stats.read";
@@ -155,18 +197,15 @@ class DatabaseService {
 
       if (campoStats.isNotEmpty) {
         batch.update(userRef, {
-          campoStats: FieldValue.increment(
-            1,
-          ), // Incremento atómico seguro para concurrencia.
+          campoStats: FieldValue.increment(1),
           'lastActivity': FieldValue.serverTimestamp(),
         });
       }
 
-      // Ejecutar todas las operaciones del batch de forma atómica.
       await batch.commit();
     } catch (e) {
       if (e is Exception) rethrow;
-      throw Exception("Error al guardar libro.");
+      throw Exception("Error al guardar libro: $e");
     }
   }
 
@@ -255,20 +294,33 @@ class DatabaseService {
     }
   }
 
-  /// Actualiza el progreso de lectura y sincroniza automáticamente la estantería y estadísticas.
-  /// También sincroniza el progreso con el club si el libro está vinculado a uno.
+  /// Actualiza el progreso de un libro en la biblioteca del usuario.
   ///
-  /// Lógica de progreso:
-  /// - Digital: usa el porcentaje directamente.
-  /// - Papel: calcula porcentaje como (páginaActual / totalPages) * 100.
+  /// Soporta tres formatos:
+  /// - `'Digital'`: actualiza directamente el porcentaje.
+  /// - `'Papel'`: calcula progreso desde página actual / total.
+  /// - `'Audio'`: calcula progreso desde currentSeconds / totalSeconds.
   ///
-  /// Sincronización con clubes: Si el libro tiene 'id_club', actualiza el progreso del miembro en ese club.
+  /// Parámetros:
+  /// - [userBookId]: ID del documento en 'user_books'.
+  /// - [formato]: 'Digital', 'Papel' o 'Audio'.
+  /// - [porcentaje]: Nuevo progreso (solo para Digital).
+  /// - [paginaActual], [totalPaginas]: Para formato Papel.
+  /// - [currentSeconds], [totalSeconds]: Para formato Audio.
+  ///
+  /// Efectos secundarios:
+  /// - Actualiza automáticamente la estantería según el progreso.
+  /// - Ajusta las estadísticas del usuario si cambia de estantería.
+  /// - Sincroniza con el club si el libro pertenece a uno.
+  /// - Actualiza la racha de lectura mediante `StreakHelper`.
   static Future<void> actualizarProgresoBiblioteca({
     required String userBookId,
     required String formato,
     double? porcentaje,
     int? paginaActual,
     int? totalPaginas,
+    int? currentSeconds,
+    int? totalSeconds,
   }) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -277,7 +329,7 @@ class DatabaseService {
       final batch = _db.batch();
       final bookRef = _db.collection('user_books').doc(userBookId);
       final userRef = _db.collection('users').doc(user.uid);
-      // Leemos estado actual para calcular deltas correctos y evitar sobrescrituras.
+
       final bookDoc = await bookRef.get();
       if (!bookDoc.exists) return;
 
@@ -286,18 +338,27 @@ class DatabaseService {
 
       // Cálculo de progreso según formato.
       double progresoFinal = 0;
+
       if (formato == 'Digital') {
-        progresoFinal = porcentaje ?? 0;
-      } else {
-        final pActual = paginaActual ?? 0;
-        final pTotal = totalPaginas ?? 1;
+        progresoFinal =
+            porcentaje ?? (currentData['progress']?.toDouble() ?? 0);
+      } else if (formato == 'Papel') {
+        final pActual = paginaActual ?? (currentData['currentPage'] ?? 0);
+        final pTotal = totalPaginas ?? (currentData['totalPages'] ?? 1);
         progresoFinal = pTotal > 0 ? (pActual / pTotal) * 100 : 0.0;
+      } else if (formato == 'Audio') {
+        // Usar valores nuevos si se proporcionan, sino los existentes
+        final actual = currentSeconds ?? (currentData['currentSeconds'] ?? 0);
+        final total = totalSeconds ?? (currentData['totalSeconds'] ?? 1);
+        if (total > 0 && actual >= 0 && actual <= total) {
+          progresoFinal = (actual / total) * 100;
+        }
       }
 
       progresoFinal = progresoFinal.clamp(0.0, 100.0);
-      final int progresoInt = progresoFinal.round().toInt();
+      final int progresoInt = progresoFinal.round();
 
-      // Determinación automática de estantería basada en progreso.
+      // Determinación automática de estantería.
       String newShelf = currentShelf;
       if (progresoInt >= 100) {
         newShelf = 'Leído';
@@ -307,22 +368,25 @@ class DatabaseService {
         newShelf = 'Por leer';
       }
 
-      // Preparación de datos para user_books.
+      // Preparar actualizaciones para user_books.
       Map<String, dynamic> bookUpdates = {
         'progress': progresoInt,
         'shelf': newShelf,
         'lastUpdate': FieldValue.serverTimestamp(),
+        'format': formato,
       };
 
-      if (formato == 'Digital') {
-        bookUpdates['format'] = 'Digital';
-      } else {
-        bookUpdates['format'] = 'Papel';
-        bookUpdates['currentPage'] = paginaActual ?? 0;
-        bookUpdates['totalPages'] = totalPaginas ?? 0;
+      if (formato == 'Papel') {
+        if (paginaActual != null) bookUpdates['currentPage'] = paginaActual;
+        if (totalPaginas != null) bookUpdates['totalPages'] = totalPaginas;
+      } else if (formato == 'Audio') {
+        if (currentSeconds != null) {
+          bookUpdates['currentSeconds'] = currentSeconds;
+        }
+        if (totalSeconds != null) bookUpdates['totalSeconds'] = totalSeconds;
       }
 
-      // Gestión de fecha de finalización: solo establecer si se completa por primera vez.
+      // Gestión de fecha de finalización.
       if (newShelf == 'Leído' && currentData['dateFinished'] == null) {
         bookUpdates['dateFinished'] = FieldValue.serverTimestamp();
       } else if (newShelf != 'Leído') {
@@ -331,32 +395,30 @@ class DatabaseService {
 
       batch.update(bookRef, bookUpdates);
 
-      // Actualización de estadísticas si cambió la estantería (delta neto).
+      // Actualizar estadísticas si cambió la estantería.
       if (currentShelf != newShelf) {
         Map<String, dynamic> statsUpdates = {};
 
-        // Restar de la antigua estantería.
+        // Restar de la antigua.
         if (currentShelf == 'Leído') {
           statsUpdates['stats.read'] = FieldValue.increment(-1);
-        } else if (currentShelf == 'Leyendo') {
-          statsUpdates['stats.inProgress'] = FieldValue.increment(-1);
-        } else if (currentShelf == 'Por leer') {
+        } else if (currentShelf == 'Leyendo'){
+          statsUpdates['stats.inProgress'] = FieldValue.increment(-1);}
+        else if (currentShelf == 'Por leer'){
           statsUpdates['stats.toRead'] = FieldValue.increment(-1);
         }
-
-        // Sumar a la nueva estantería.
+        // Sumar a la nueva.
         if (newShelf == 'Leído') {
           statsUpdates['stats.read'] = FieldValue.increment(1);
-        } else if (newShelf == 'Leyendo') {
+        } else if (newShelf == 'Leyendo'){
           statsUpdates['stats.inProgress'] = FieldValue.increment(1);
-        } else if (newShelf == 'Por leer') {
+        }else if (newShelf == 'Por leer'){
           statsUpdates['stats.toRead'] = FieldValue.increment(1);
-        }
-
+      }
         if (statsUpdates.isNotEmpty) batch.update(userRef, statsUpdates);
       }
 
-      // Sincronización con Club: Si el libro pertenece a un club, actualizamos el progreso del miembro.
+      // Sincronización con Club.
       final String? clubId = currentData['id_club'];
       if (clubId != null && clubId.isNotEmpty) {
         batch.update(_db.collection('clubs').doc(clubId), {
@@ -366,10 +428,9 @@ class DatabaseService {
       }
 
       await batch.commit();
-      // Actualizar racha de lectura tras actualizar progreso (acción relevante para el hábito).
       await StreakHelper.updateStreak();
     } catch (e) {
-      throw Exception("Error al actualizar progreso.");
+      throw Exception("Error al actualizar progreso: $e");
     }
   }
 
@@ -469,13 +530,13 @@ class DatabaseService {
         'status': 'activo',
         'createdAt': FieldValue.serverTimestamp(),
         'currentGoalId': initialGoalRef.id,
-        'currentGoalName': metaInicial, // ✅ Ahora coincide con club_goals
+        'currentGoalName': metaInicial,
         'limitDate': null,
       });
 
       // 2. Crear meta inicial en subcolección
       batch.set(initialGoalRef, {
-        'goalName': metaInicial, // ✅ Mismo valor que currentGoalName
+        'goalName': metaInicial,
         'endDate': null,
         'createdAt': FieldValue.serverTimestamp(),
         'status': 'activa',
@@ -483,7 +544,7 @@ class DatabaseService {
 
       // 3. Crear comentario de bienvenida
       batch.set(commentRef, {
-        'text': comentarioBienvenida, // ✅ Texto largo completo
+        'text': comentarioBienvenida,
         'userName': userDoc.data()?['name'] ?? "Anfitrión",
         'userId': user.uid,
         'userPhoto': userDoc.data()?['photoURL'],
@@ -511,9 +572,7 @@ class DatabaseService {
       await batch.commit();
       await StreakHelper.updateStreak();
     } catch (e) {
-      throw Exception(
-        "Error al crear el club.",
-      ); 
+      throw Exception("Error al crear el club.");
     }
   }
 

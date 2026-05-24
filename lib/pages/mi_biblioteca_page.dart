@@ -416,19 +416,21 @@ class _MiBibliotecaPageState extends State<MiBibliotecaPage>
 
     try {
       await DatabaseService.guardarLibroFirestore(
-        res['titulo'] ?? "Sin título",
-        res['autor'] ?? "Anónimo",
-        res['estanteria'] ?? "Leyendo",
-        res['progreso'] ?? 0,
-        res['fechaInicio'],
-        res['fechaFin'],
-        res['formato'] ?? "Papel",
-        res['paginasTotales'] ?? 0,
-        res['paginaActual'] ?? 0,
-        res['cover'] ?? "",
-        res['isbn'] ?? "",
-        res['sinopsis'] ?? '',
-        res['genero'] ?? 'Sin género',
+        titulo: res['titulo'] ?? "Sin título",
+        autor: res['autor'] ?? "Anónimo",
+        estanteria: res['estanteria'] ?? "Leyendo",
+        progreso: res['progreso'] ?? 0,
+        fechaInicio: res['fechaInicio'],
+        fechaFin: res['fechaFin'],
+        formato: res['formato'] ?? "Papel",
+        paginasTotalesFormulario: res['paginasTotales'] ?? 0,
+        paginaActual: res['paginaActual'] ?? 0,
+        totalSeconds: res['totalSeconds'],        
+        currentSeconds: res['currentSeconds'],    
+        coverUrlFormulario: res['cover'] ?? "",
+        isbn: res['isbn'] ?? "",
+        sinopsis: res['sinopsis'] ?? '',
+        genero: res['genero'] ?? 'Sin género',
       );
 
       if (mounted) {

@@ -3,29 +3,13 @@ import 'package:flutter/material.dart';
 import 'package:tintaviva/services/database.dart';
 import 'package:tintaviva/services/google_books_api.dart';
 import 'package:tintaviva/theme/app_styles.dart';
+import 'package:tintaviva/utils/ui_helpers.dart';
 import '../widgets/dialogo_edicion_rapida_libro.dart';
 
 // ─────────────────────────────────────────────────────────────
 // DIÁLOGOS DE GESTIÓN DE LIBROS Y PROGRESO
 // ─────────────────────────────────────────────────────────────
 
-/// Abre un diálogo para editar rápidamente el progreso de un libro.
-///
-/// Flujo:
-/// 1. Muestra `DialogoEdicionRapida` para obtener nuevos valores
-/// 2. Si el usuario intenta disminuir el progreso, pide confirmación explícita
-/// 3. Llama a `DatabaseService.actualizarProgresoBiblioteca` con los nuevos valores
-/// 4. Muestra feedback visual (`SnackBar`) del resultado
-///
-/// Parámetros:
-/// - [context]: `BuildContext` para navegación y mostrar dialogs/snackbars
-/// - [docId]: El ID del documento en `'user_books'` (`userBookId`)
-/// - [libro]: `Map<String, dynamic>` con datos actuales del libro
-///
-/// Lógica de prevención de errores:
-/// - Si el formato es `'Papel'` y la nueva página < página anterior → confirma
-/// - Si el formato es `'Digital'` y el nuevo progreso < progreso anterior → confirma
-/// - Si no hay cambios → sale sin hacer nada (evita llamadas innecesarias a la BD)
 Future<void> abrirDialogoEdicionRapida(
   BuildContext context,
   String docId,
@@ -35,8 +19,13 @@ Future<void> abrirDialogoEdicionRapida(
   final int progresoAnterior = libro['progress'] ?? 0;
   final int totalPaginas = libro['totalPages'] ?? 0;
   final int paginaAnterior = libro['currentPage'] ?? 0;
+  
+  // ✅ NUEVO: Extraer campos de Audio
+  final int? totalSeconds = libro['totalSeconds'] as int?;
+  final int? currentSeconds = libro['currentSeconds'] as int?;
 
-  final Map<String, int>? res = await showDialog<Map<String, int>>(
+  // ✅ CORREGIDO: Pasar totalSeconds y currentSeconds al diálogo
+  final Map<String, dynamic>? res = await showDialog<Map<String, dynamic>>(
     context: context,
     builder: (context) => DialogoEdicionRapida(
       tituloLibro: libro['title'] ?? "Sin título",
@@ -44,6 +33,8 @@ Future<void> abrirDialogoEdicionRapida(
       formato: formato,
       paginasTotales: totalPaginas,
       paginaActual: paginaAnterior,
+      totalSeconds: totalSeconds,        // ← AÑADIR
+      currentSeconds: currentSeconds,    // ← AÑADIR
     ),
   );
 
@@ -51,28 +42,37 @@ Future<void> abrirDialogoEdicionRapida(
     return;
   }
 
-  int nuevoProgreso = res['progreso']!;
-  int nuevaPagina = res['pagina']!;
+  int nuevoProgreso = res['progreso'] ?? progresoAnterior;
+  int? nuevaPagina = res['pagina'];
+  int? nuevosCurrentSeconds = res['currentSeconds']; // ← NUEVO: para Audio
+
   bool haDisminuido = false;
   String mensajeConfirmacion = "";
 
   if (formato == 'Papel') {
-    if (nuevaPagina == paginaAnterior) {
-      return;
-    }
-    if (nuevaPagina < paginaAnterior) {
+    if (nuevaPagina == paginaAnterior) return;
+    if (nuevaPagina != null && paginaAnterior > 0 && nuevaPagina < paginaAnterior) {
       haDisminuido = true;
-      mensajeConfirmacion =
-          "Has indicado la página $nuevaPagina, menor a la actual ($paginaAnterior). ¿Seguro?";
+      mensajeConfirmacion = "Has indicado la página $nuevaPagina, menor a la actual ($paginaAnterior). ¿Seguro?";
     }
-  } else {
-    if (nuevoProgreso == progresoAnterior) {
-      return;
-    }
-    if (nuevoProgreso < progresoAnterior) {
+  } 
+  else if (formato == 'Audio') {
+    // ✅ Comparar segundos para Audio
+    if (nuevosCurrentSeconds == currentSeconds) return;
+    if (nuevosCurrentSeconds != null && currentSeconds != null && currentSeconds > 0 && nuevosCurrentSeconds < currentSeconds) {
       haDisminuido = true;
-      mensajeConfirmacion =
-          "Has indicado $nuevoProgreso%, menor al actual ($progresoAnterior%). ¿Seguro?";
+      // Usar segundosATiempo de ui_helpers para mostrar tiempo legible
+      final String actualAnterior = segundosATiempo(currentSeconds);
+      final String actualNuevo = segundosATiempo(nuevosCurrentSeconds);
+      mensajeConfirmacion = "Has retrocedido en el audio ($actualNuevo < $actualAnterior). ¿Seguro?";
+    }
+  } 
+  else {
+    // Digital
+    if (nuevoProgreso == progresoAnterior) return;
+    if (nuevoProgreso < progresoAnterior && progresoAnterior > 0) {
+      haDisminuido = true;
+      mensajeConfirmacion = "Has indicado $nuevoProgreso%, menor al actual ($progresoAnterior%). ¿Seguro?";
     }
   }
 
@@ -80,45 +80,28 @@ Future<void> abrirDialogoEdicionRapida(
     final bool? confirmar = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text(
-          "¿Disminuir progreso?",
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
+        title: const Text("¿Disminuir progreso?", style: TextStyle(fontWeight: FontWeight.bold)),
         content: Text(mensajeConfirmacion),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text(
-              "Cancelar",
-              style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold),
-            ),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text(
-              "Sí, disminuir",
-              style: TextStyle(
-                color: AppColors.naranja,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancelar", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold))),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("Sí, disminuir", style: TextStyle(color: AppColors.naranja, fontWeight: FontWeight.bold))),
         ],
       ),
     );
-    if (confirmar != true || !context.mounted) {
-      return;
-    }
+    if (confirmar != true || !context.mounted) return;
   }
 
   try {
+    // ✅ CORREGIDO: Pasar currentSeconds para Audio
     await DatabaseService.actualizarProgresoBiblioteca(
       userBookId: docId,
       formato: formato,
       porcentaje: formato == 'Digital' ? nuevoProgreso.toDouble() : null,
       paginaActual: formato == 'Papel' ? nuevaPagina : null,
       totalPaginas: totalPaginas,
+      currentSeconds: formato == 'Audio' ? nuevosCurrentSeconds : null,  // ← AÑADIR
+      totalSeconds: formato == 'Audio' ? totalSeconds : null,            // ← AÑADIR (para referencia)
     );
 
     if (context.mounted) {
@@ -130,7 +113,6 @@ Future<void> abrirDialogoEdicionRapida(
     }
   }
 }
-
 /// Diálogo estandarizado para confirmar borrado de libros.
 ///
 /// Retorna:

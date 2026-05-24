@@ -5,7 +5,14 @@ import 'package:tintaviva/utils/dialogos_helpers.dart';
 import 'package:tintaviva/utils/ui_helpers.dart';
 import 'package:tintaviva/widgets/app_book_cover.dart';
 
+
+
 /// Tarjeta reutilizable para mostrar un libro con su progreso y opciones de edición rápida.
+///
+/// Soporta tres formatos:
+/// - `'Papel'`: muestra `"Pág. X de Y (progress%)"`
+/// - `'Digital'`: muestra `"{progress}% leído"`
+/// - `'Audio'`: muestra `"MM:SS / HH:MM:SS (progress%)"`
 ///
 /// Usos principales:
 /// 1. `MiBibliotecaPage`: lista de libros en biblioteca personal (borde naranja)
@@ -14,9 +21,7 @@ import 'package:tintaviva/widgets/app_book_cover.dart';
 /// Características visuales:
 /// - Portada con sombra y bordes redondeados (`AppBookCover`)
 /// - Título (2 líneas máx.) y autor (1 línea) con `TextOverflow.ellipsis`
-/// - Barra de progreso adaptativa (`WidgetBarraProgreso`):
-///   - `'Digital'`: muestra `"{progress}% leído"`
-///   - `'Papel'`: muestra `"Pág. X de Y (progress%)"`
+/// - Barra de progreso adaptativa (`WidgetBarraProgreso`)
 /// - Borde de color: `AppColors.naranja` (personal) | `AppColors.morado` (club)
 /// - Sombra sutil para profundidad visual
 ///
@@ -27,64 +32,48 @@ import 'package:tintaviva/widgets/app_book_cover.dart';
 /// Estructura de datos esperada en `libroData`:
 /// ```dart
 /// {
-///   'title': String,        // Título del libro
-///   'author': String,       // Autor del libro
-///   'bookCover': String?,   // URL de portada (puede ser null)
-///   'bookId': String,       // ID del libro en colección 'books'
-///   'progress': int,        // Porcentaje de progreso (0-100)
-///   'currentPage': int,     // Página actual (solo relevante para 'Papel')
-///   'totalPages': int,      // Total de páginas del libro
-///   'format': String,       // 'Digital' | 'Papel'
+///   'title': String,            // Título del libro
+///   'author': String,           // Autor del libro
+///   'bookCover': String?,       // URL de portada (puede ser null)
+///   'bookId': String,           // ID del libro en colección 'books'
+///   'progress': int,            // Porcentaje de progreso (0-100)
+///   'format': String,           // 'Digital' | 'Papel' | 'Audio'
+///   // Para formato 'Papel':
+///   'currentPage': int,         // Página actual
+///   'totalPages': int,          // Total de páginas
+///   // Para formato 'Audio':
+///   'currentSeconds': int?,     // Segundos reproducidos (null si no es Audio)
+///   'totalSeconds': int?,       // Duración total en segundos (null si no es Audio)
 /// }
 /// ```
 ///
 /// Ejemplo de uso:
 /// ```dart
-/// // En MiBibliotecaPage:
+/// // Libro en formato Audio:
 /// TarjetaLibroProgreso(
 ///   docId: doc.id,
-///   libroData: libro,
-///   esClub: false, // Borde naranja
-/// )
-///
-/// // En DetalleClubPage:
-/// TarjetaLibroProgreso(
-///   docId: userBookDoc.id,
-///   libroData: userBookData,
-///   esClub: true, // Borde morado
+///   libroData: {
+///     'title': 'Mi audiolibro',
+///     'author': 'Autor X',
+///     'format': 'Audio',
+///     'progress': 22,
+///     'currentSeconds': 1845,   // 30:45
+///     'totalSeconds': 57853,    // 16:04:13
+///   },
 /// )
 /// ```
 class TarjetaLibroProgreso extends StatelessWidget {
   /// ID del documento en la colección `'user_books'`.
-  ///
-  /// Usado para:
-  /// - Navegación a `DetalleLibroPage(userBookId: docId)`
-  /// - Actualizar progreso vía `abrirDialogoEdicionRapida(context, docId, ...)`
   final String docId;
 
   /// Mapa con los datos del libro a mostrar.
-  ///
   /// Debe contener las claves documentadas en la descripción de la clase.
-  /// Valores `null` se manejan con fallbacks visuales (`'Sin título'`, `'Autor desconocido'`, etc.)
   final Map<String, dynamic> libroData;
 
   /// Callback opcional para personalizar la navegación al tocar la tarjeta.
-  ///
-  /// Si se proporciona, se ejecuta en lugar de la navegación por defecto a `DetalleLibroPage`.
-  ///
-  /// Caso de uso típico:
-  /// - En `DetalleClubPage`, para navegar a `DetalleClubPage` en lugar de `DetalleLibroPage`
-  ///   cuando el libro pertenece a un club.
   final VoidCallback? onTapCustom;
 
-  /// Indica si la tarjeta representa un libro de club.
-  ///
-  /// Efecto visual:
-  /// - `false` (por defecto): borde `AppColors.naranja.withValues(alpha: 0.8)`
-  /// - `true`: borde `AppColors.morado.withValues(alpha: 0.8)`
-  ///
-  /// Propósito:
-  /// - Diferenciar visualmente libros personales vs. libros de club en listas mixtas
+  /// Indica si la tarjeta representa un libro de club (cambia el color del borde).
   final bool esClub;
 
   const TarjetaLibroProgreso({
@@ -121,7 +110,6 @@ class TarjetaLibroProgreso extends StatelessWidget {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         color: Colors.transparent,
         child: InkWell(
-          // Navegación: usa onTapCustom si existe, sino navega a DetalleLibroPage por defecto
           onTap:
               onTapCustom ??
               () {
@@ -141,7 +129,7 @@ class TarjetaLibroProgreso extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Portada del libro con sombra y AppBookCover para fallback automático
+                // Portada del libro
                 Container(
                   width: 70,
                   height: 105,
@@ -190,11 +178,13 @@ class TarjetaLibroProgreso extends StatelessWidget {
                       ),
                       const SizedBox(height: 12),
 
-                      // Barra de progreso adaptativa (Papel/Digital)
+                      // Barra de progreso adaptativa (Papel/Digital/Audio)
                       WidgetBarraProgreso(
                         progress: libroData['progress'] ?? 0,
                         currentPage: libroData['currentPage'] ?? 0,
                         totalPages: libroData['totalPages'] ?? 0,
+                        currentSeconds: libroData['currentSeconds'],
+                        totalSeconds: libroData['totalSeconds'],
                         format: libroData['format'] ?? 'Digital',
                         height: 6,
                       ),
@@ -203,7 +193,7 @@ class TarjetaLibroProgreso extends StatelessWidget {
                   ),
                 ),
 
-                // Botón de edición rápida de progreso
+                // Botón de edición rápida
                 IconButton(
                   icon: Icon(
                     Icons.edit_note,
@@ -222,6 +212,92 @@ class TarjetaLibroProgreso extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Widget que muestra una barra de progreso lineal con texto descriptivo adaptado al formato.
+///
+/// Formatos soportados:
+/// - `'Digital'`: `"{progress}% leído"`
+/// - `'Papel'`: `"Pág. X de Y (progress%)"`
+/// - `'Audio'`: `"MM:SS / HH:MM:SS (progress%)"`
+class WidgetBarraProgreso extends StatelessWidget {
+  /// Porcentaje de progreso completado (0-100).
+  final int progress;
+
+  /// Página actual (solo para formato `'Papel'`).
+  final int currentPage;
+
+  /// Total de páginas (solo para formato `'Papel'`).
+  final int totalPages;
+
+  /// Segundos reproducidos (solo para formato `'Audio'`).
+  /// Puede ser `null` si el formato no es Audio.
+  final int? currentSeconds;
+
+  /// Duración total en segundos (solo para formato `'Audio'`).
+  /// Puede ser `null` si el formato no es Audio.
+  final int? totalSeconds;
+
+  /// Formato del libro: `'Digital'`, `'Papel'` o `'Audio'`.
+  final String format;
+
+  /// Altura de la barra en píxeles.
+  final double height;
+
+  const WidgetBarraProgreso({
+    super.key,
+    required this.progress,
+    required this.currentPage,
+    required this.totalPages,
+    this.currentSeconds,
+    this.totalSeconds,
+    required this.format,
+    this.height = 8,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color colorNaranja = const Color(0xFFFF6B35);
+    String textoDescriptivo = "$progress% leído";
+
+    if (format == 'Papel' && totalPages > 0) {
+      final int paginaMostrar = currentPage > 0
+          ? currentPage
+          : (progress * totalPages / 100).round();
+      textoDescriptivo = "Pág. $paginaMostrar de $totalPages ($progress%)";
+    } else if (format == 'Audio' &&
+        totalSeconds != null &&
+        currentSeconds != null) {
+      // Mostrar tiempos formateados solo si ambos valores están presentes
+      final actual = segundosATiempo(currentSeconds!);
+      final total = segundosATiempo(totalSeconds!);
+      textoDescriptivo = "$actual / $total ($progress%)";
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(height / 2),
+          child: LinearProgressIndicator(
+            value: progress / 100,
+            backgroundColor: Colors.grey[200],
+            color: colorNaranja,
+            minHeight: height,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          textoDescriptivo,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey[700],
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
     );
   }
 }

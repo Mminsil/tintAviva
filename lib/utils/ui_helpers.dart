@@ -2,124 +2,57 @@ import 'package:confetti/confetti.dart';
 import 'package:flutter/material.dart';
 import 'package:tintaviva/theme/app_styles.dart';
 
-// ─────────────────────────────────────────────────────────────
-// WIDGETS VISUALES REUTILIZABLES
-// ─────────────────────────────────────────────────────────────
 
-/// Widget visual reutilizable para mostrar barras de progreso de lectura.
-///
-/// Propósito:
-/// - Mostrar visualmente el avance de un libro en biblioteca o clubes
-/// - Adaptar el texto descriptivo según el formato del libro (`'Papel'` | `'Digital'`)
-/// - Mantener consistencia visual en toda la aplicación con colores corporativos
-///
-/// Comportamiento por formato:
-/// - `'Digital'`: Muestra `"{progress}% leído"`
-/// - `'Papel'`: Muestra `"Pág. X de Y (progress%)"`, calculando la página si no se proporciona
-///
-/// Parámetros:
-/// - [progress]: Porcentaje de progreso (0-100), usado para el valor de `LinearProgressIndicator`
-/// - [currentPage]: Página actual (solo relevante para formato `'Papel'`)
-/// - [totalPages]: Total de páginas del libro (requerido para formato `'Papel'`)
-/// - [format]: `'Digital'` | `'Papel'` → determina el texto descriptivo mostrado
-/// - [height]: Altura de la barra en píxeles (por defecto: `8`)
-///
-/// Características visuales:
-/// - Barra con `borderRadius` circular calculado como `height / 2`
-/// - Color de progreso: `AppColors.naranja` (definido en `app_styles.dart`)
-/// - Fondo de barra: `Colors.grey[200]` para contraste suave
-/// - Texto descriptivo: `fontSize: 12`, `color: Colors.grey[700]`, `fontWeight: w500`
-///
-/// Ejemplo de uso:
-/// ```dart
-/// // En TarjetaLibroProgreso:
-/// WidgetBarraProgreso(
-///   progress: 75,
-///   currentPage: 150,
-///   totalPages: 200,
-///   format: 'Papel',
-///   height: 6,
-/// )
-/// // Resultado visual: "Pág. 150 de 200 (75%)" + barra al 75%
-/// ```
-class WidgetBarraProgreso extends StatelessWidget {
-  /// Porcentaje de progreso completado (0-100).
-  ///
-  /// Controla el valor de `LinearProgressIndicator.value` (se normaliza a 0.0-1.0 internamente).
-  final int progress;
+// ============================================================================
+// HELPER: Conversión de tiempo ↔ segundos (para Audio)
+// ============================================================================
 
-  /// Página actual de lectura (solo relevante para formato `'Papel'`).
-  ///
-  /// Si es `0` y el formato es `'Papel'`, se calcula automáticamente como:
-  /// `(progress * totalPages / 100).round()`
-  final int currentPage;
+/// Convierte un string en formato "HH:MM:SS" o "MM:SS" a segundos totales.
+/// Ej: "16:04:13" → 57853, "30:45" → 1845
+/// Retorna null si el formato es inválido.
+int? tiempoASegundos(String tiempo) {
+  final partes = tiempo.trim().split(':');
+  if (partes.isEmpty || partes.length > 3) return null;
 
-  /// Total de páginas del libro (requerido para formato `'Papel'`).
-  ///
-  /// Usado para:
-  /// - Calcular la página actual si `currentPage == 0`
-  /// - Mostrar el texto descriptivo `"Pág. X de Y"`
-  final int totalPages;
+  // Validar que todas las partes sean números
+  if (partes.any((p) => int.tryParse(p) == null)) return null;
 
-  /// Formato del libro que determina el texto descriptivo.
-  ///
-  /// Valores permitidos:
-  /// - `'Digital'` → Muestra `"{progress}% leído"`
-  /// - `'Papel'` → Muestra `"Pág. X de Y (progress%)"`
-  final String format;
-
-  /// Altura de la barra de progreso en píxeles.
-  ///
-  /// Por defecto: `8`. El `borderRadius` se calcula automáticamente como `height / 2`
-  /// para mantener bordes perfectamente circulares.
-  final double height;
-
-  const WidgetBarraProgreso({
-    super.key,
-    required this.progress,
-    required this.currentPage,
-    required this.totalPages,
-    required this.format,
-    this.height = 8,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final Color colorNaranja = const Color(0xFFFF6B35);
-    String textoDescriptivo = "$progress% leído";
-
-    // Lógica condicional para formato Papel: calcula página y ajusta texto
-    if (format == 'Papel' && totalPages > 0) {
-      final int paginaMostrar = currentPage > 0
-          ? currentPage
-          : (progress * totalPages / 100).round();
-      textoDescriptivo = "Pág. $paginaMostrar de $totalPages ($progress%)";
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(height / 2),
-          child: LinearProgressIndicator(
-            value: progress / 100,
-            backgroundColor: Colors.grey[200],
-            color: colorNaranja,
-            minHeight: height,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          textoDescriptivo,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey[700],
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ],
-    );
+  int segundos = 0;
+  // Si es HH:MM:SS
+  if (partes.length == 3) {
+    final horas = int.parse(partes[0]);
+    final minutos = int.parse(partes[1]);
+    final segs = int.parse(partes[2]);
+    if (minutos >= 60 || segs >= 60) return null;
+    segundos = (horas * 3600) + (minutos * 60) + segs;
   }
+  // Si es MM:SS
+  else if (partes.length == 2) {
+    final minutos = int.parse(partes[0]);
+    final segs = int.parse(partes[1]);
+    if (segs >= 60) return null;
+    segundos = (minutos * 60) + segs;
+  }
+  // Si es solo segundos
+  else if (partes.length == 1) {
+    segundos = int.parse(partes[0]);
+  }
+
+  return segundos >= 0 ? segundos : null;
+}
+
+/// Convierte segundos totales a string legible "HH:MM:SS" o "MM:SS".
+/// Ej: 57853 → "16:04:13", 1845 → "30:45"
+String segundosATiempo(int segundos) {
+  if (segundos < 0) return "00:00";
+  final h = segundos ~/ 3600;
+  final m = (segundos % 3600) ~/ 60;
+  final s = segundos % 60;
+
+  // Si hay horas, mostrar HH:MM:SS; si no, MM:SS
+  return h > 0
+      ? '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}'
+      : '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
 }
 
 /// Widget de confetti celebratorio reutilizable para logros de lectura.
@@ -324,7 +257,9 @@ class _TextoExpandibleState extends State<TextoExpandible> {
         children: [
           Text(
             widget.texto,
-            style: widget.style ?? const TextStyle(color: Colors.grey, height: 1.5),
+            style:
+                widget.style ??
+                const TextStyle(color: Colors.grey, height: 1.5),
           ),
           // Mostrar botón "Leer menos" solo si el texto original era largo
           if (widget.texto.length > widget.maxLength)
@@ -358,7 +293,8 @@ class _TextoExpandibleState extends State<TextoExpandible> {
       children: [
         Text(
           '${widget.texto.substring(0, widget.maxLength)}...',
-          style: widget.style ?? const TextStyle(color: Colors.grey, height: 1.5),
+          style:
+              widget.style ?? const TextStyle(color: Colors.grey, height: 1.5),
         ),
         TextButton(
           onPressed: () {

@@ -152,7 +152,7 @@ class _DialogoGuardarEntradaState extends State<DialogoGuardarEntrada> {
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       title: Text(
-        'Guardar en el diario de "${widget.tituloLibro}"',
+        widget.tituloLibro,
         style: const TextStyle(
           fontWeight: FontWeight.bold,
           color: AppColors.morado,
@@ -182,15 +182,21 @@ class _DialogoGuardarEntradaState extends State<DialogoGuardarEntrada> {
               //  Campo de texto (común para ambos tipos)
               TextField(
                 controller: _textController,
-                maxLines: esCita ? 3 : 4,
+                minLines: esCita ? 4 : 6,
+                maxLines: esCita ? 8 : 12,
+                expands: false,
                 autofocus: true,
+                keyboardType: TextInputType.multiline,
+                textAlignVertical: TextAlignVertical.top,
                 textCapitalization: TextCapitalization.sentences,
                 enableInteractiveSelection: true,
                 decoration: InputDecoration(
                   hintText: esCita
                       ? 'Pega o escribe la frase...'
                       : '¿Qué te hizo sentir esta lectura?',
-                  hintStyle: TextStyle(color: Colors.grey[400]),
+                  hintStyle: TextStyle(color: Colors.grey[400], fontSize: 14),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  isDense: false,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(color: Colors.grey.shade300),
@@ -226,7 +232,8 @@ class _DialogoGuardarEntradaState extends State<DialogoGuardarEntrada> {
                     Tooltip(
                       message:
                           'Selecciona tu emoción para recordar cómo te hizo sentir este libro.',
-                      waitDuration: const Duration(milliseconds: 500),
+                      waitDuration: const Duration(milliseconds: 200),
+                      triggerMode: TooltipTriggerMode.tap,
                       child: Icon(
                         Icons.help_outline,
                         size: 14,

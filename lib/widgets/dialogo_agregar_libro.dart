@@ -2,52 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:tintaviva/theme/app_styles.dart';
 import 'package:tintaviva/utils/dialogos_helpers.dart';
+import 'package:tintaviva/utils/ui_helpers.dart';
 import '../utils/input_validadores.dart';
+
+// ============================================================================
+// DIÁLOGO DE AGREGAR LIBRO
+// ============================================================================
 
 /// Diálogo modal para agregar un nuevo libro a la biblioteca del usuario.
 ///
-/// Características principales:
-/// 1. Búsqueda integrada en catálogo global (Firestore + Google Books API) vía `mostrarDialogoBusquedaLibros`
-/// 2. Validación de campos obligatorios y formatos numéricos con `GlobalKey<FormState>`
-/// 3. Lógica condicional según estantería (`'Leído'`, `'Leyendo'`, `'Por leer'`) y formato (`'Papel'`, `'Digital'`)
-/// 4. Cálculo automático de progreso para formato Papel: `(página actual / total) * 100`
-/// 5. Selección de fechas de inicio/fin solo para libros en estado `'Leído'`
+/// Soporta tres formatos:
+/// - `'Papel'`: ingreso de páginas (actual/total)
+/// - `'Digital'`: ingreso directo de porcentaje (0-100)
+/// - `'Audio'`: ingreso de tiempos en formato MM:SS o HH:MM:SS (SIN campo de porcentaje)
 ///
-/// Retorna al padre un `Map<String, dynamic>` con todos los datos del libro para ser procesado por `DatabaseService`:
-/// ```dart
-/// {
-///   'titulo': String,           // Título del libro (obligatorio)
-///   'autor': String,            // Autor del libro (obligatorio)
-///   'estanteria': String,       // 'Leído' | 'Leyendo' | 'Por leer'
-///   'progreso': int,            // Porcentaje calculado (0-100)
-///   'fechaInicio': DateTime?,   // Solo si estantería == 'Leído'
-///   'fechaFin': DateTime?,      // Solo si estantería == 'Leído'
-///   'formato': String,          // 'Papel' | 'Digital'
-///   'paginasTotales': int,      // Total de páginas (0 si es Digital)
-///   'paginaActual': int,        // Página actual (0 si es Digital o no 'Leyendo')
-///   'cover': String,            // URL de portada (puede ser vacío)
-///   'isbn': String,             // ISBN del catálogo global (puede ser vacío)
-///   'sinopsis': String,         // Sinopsis del catálogo global (puede ser vacío)
-///   'genero': String,           // Género normalizado ('Sin género' si vacío)
-/// }
-/// ```
-///
-/// Ejemplo de uso:
-/// ```dart
-/// // En MiBibliotecaPage, desde el botón "Agregar libro":
-/// final resultado = await showDialog<Map<String, dynamic>>(
-///   context: context,
-///   builder: (context) => const DialogoAgregarLibro(),
-/// );
-/// if (resultado != null) {
-///   // Procesar en DatabaseService.agregarLibroBiblioteca
-///   await DatabaseService.agregarLibroBiblioteca(
-///     userId: user.uid,
-///     titulo: resultado['titulo'],
-///     // ... resto de parámetros
-///   );
-/// }
-/// ```
+/// Retorna al padre un `Map<String, dynamic>` con todos los datos del libro.
 class DialogoAgregarLibro extends StatefulWidget {
   const DialogoAgregarLibro({super.key});
 
@@ -56,15 +25,9 @@ class DialogoAgregarLibro extends StatefulWidget {
 }
 
 class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
-  /// Clave para validar el formulario completo.
-  ///
-  /// Se usa en `_enviarDatos()` con `_formKey.currentState!.validate()`
-  /// para ejecutar todas las validaciones de `TextFormField.validator`.
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
-  /// Controladores para los campos de texto del formulario.
-  ///
-  /// Se liberan en `dispose()` para evitar fugas de memoria.
+  // Controllers para campos de texto
   final TextEditingController _tituloController = TextEditingController();
   final TextEditingController _autorController = TextEditingController();
   final TextEditingController _progresoController = TextEditingController();
@@ -73,76 +36,53 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
   final TextEditingController _paginaActualController = TextEditingController();
   final TextEditingController _coverUrlController = TextEditingController();
 
-  /// Estado local del formulario: estantería seleccionada.
-  ///
-  /// Valores permitidos: `'Leído'`, `'Leyendo'`, `'Por leer'`
-  /// Por defecto: `'Leyendo'`
-  ///
-  /// Efectos al cambiar:
-  /// - `'Leído'`: progreso = 100, muestra selectores de fecha
-  /// - `'Por leer'`: progreso = 0, oculta campos de progreso
-  /// - `'Leyendo'`: muestra selector de formato (Papel/Digital)
+  // Controllers para formato Audio (se inicializan bajo demanda)
+  TextEditingController? _tiempoTotalController;
+  TextEditingController? _tiempoActualController;
+
+  // Estado del formulario
   String _estanteriaSeleccionada = 'Leyendo';
-
-  /// Estado local del formulario: formato del libro.
-  ///
-  /// Valores permitidos: `'Papel'`, `'Digital'`
-  /// Por defecto: `'Papel'`
-  ///
-  /// Efectos al cambiar:
-  /// - `'Papel'`: muestra campos "Pág. Actual" + "Total Págs."
-  /// - `'Digital'`: muestra campo "Porcentaje" (0-100)
-  String _formatoLibro = 'Papel';
-
-  /// Fecha de inicio de lectura (solo relevante si `_estanteriaSeleccionada == 'Leído'`).
-  ///
-  /// Por defecto: 7 días antes de la fecha actual.
+  String _formatoLibro = 'Papel'; // Por defecto Papel para mayor compatibilidad
   DateTime _fechaInicio = DateTime.now().subtract(const Duration(days: 7));
-
-  /// Fecha de finalización de lectura (solo relevante si `_estanteriaSeleccionada == 'Leído'`).
-  ///
-  /// Por defecto: fecha actual.
-  /// Restricción: no puede ser anterior a `_fechaInicio`.
   DateTime _fechaFin = DateTime.now();
 
-  /// Variables para almacenar datos adicionales obtenidos de la búsqueda global.
-
-  /// ID del libro en el catálogo global (colección `'books'` de Firestore).
-  /// Si es `null`, el libro se considera "manual" (escrito por el usuario).
+  // Campos opcionales desde búsqueda en catálogo global
   String? _bookIdGlobal;
-
-  /// ISBN del libro (para identificación única y generación de `bookId`).
   String? _isbnGlobal;
-
-  /// Sinopsis del libro (para enriquecer el detalle en `DetalleLibroPage`).
   String? _sinopsisGlobal;
-
-  /// Género del libro (normalizado a `'Sin género'` si viene vacío).
   String? _generoGlobal;
 
   @override
   void initState() {
     super.initState();
-
     // Inicializar valores según estado y formato por defecto
+    _inicializarValoresPorDefecto();
+  }
+
+  /// Inicializa los valores del formulario según el estado y formato actuales.
+  void _inicializarValoresPorDefecto() {
     if (_estanteriaSeleccionada == 'Leyendo') {
       if (_formatoLibro == 'Digital') {
         _progresoController.text = "1";
-      } else {
+      } else if (_formatoLibro == 'Papel') {
         _paginaActualController.text = "1";
+      } else if (_formatoLibro == 'Audio') {
+        _tiempoTotalController ??= TextEditingController(text: "00:00:00");
+        _tiempoActualController ??= TextEditingController(text: "00:00");
       }
     }
   }
 
   @override
   void dispose() {
-    // Liberar recursos de los controladores para evitar fugas de memoria.
     _tituloController.dispose();
     _autorController.dispose();
     _progresoController.dispose();
     _paginasTotalesController.dispose();
     _paginaActualController.dispose();
     _coverUrlController.dispose();
+    _tiempoTotalController?.dispose();
+    _tiempoActualController?.dispose();
     super.dispose();
   }
 
@@ -165,7 +105,7 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
               Text('Agregar nuevo libro', style: AppTextStyles.dialogTitle),
               const SizedBox(height: 20),
 
-              // Campo Título con búsqueda integrada y botón de limpiar.
+              // Campo Título con búsqueda integrada
               TextFormField(
                 controller: _tituloController,
                 decoration:
@@ -175,14 +115,12 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                     ).copyWith(
                       prefixIcon: IconButton(
                         icon: const Icon(Icons.search),
-                        onPressed:
-                            _mostrarBusquedaLibros, // Abre diálogo de búsqueda híbrida.
+                        onPressed: _mostrarBusquedaLibros,
                       ),
                       suffixIcon: _tituloController.text.isNotEmpty
                           ? IconButton(
                               icon: const Icon(Icons.clear),
-                              onPressed:
-                                  _limpiarFormulario, // Limpia todo el formulario.
+                              onPressed: _limpiarFormulario,
                             )
                           : null,
                     ),
@@ -190,16 +128,13 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                     ? "El título es obligatorio"
                     : null,
                 onChanged: (val) {
-                  // Si el usuario edita manualmente el título, invalidamos la selección de catálogo global.
                   if (_bookIdGlobal != null) {
-                    setState(() {
-                      _bookIdGlobal = null;
-                    });
+                    setState(() => _bookIdGlobal = null);
                   }
                 },
               ),
 
-              // Indicador visual si el libro fue verificado en catálogo global.
+              // Indicador de datos verificados
               if (_bookIdGlobal != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 4, left: 4, bottom: 8),
@@ -223,6 +158,7 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                 ),
               const SizedBox(height: 15),
 
+              // Autor
               TextFormField(
                 controller: _autorController,
                 decoration: AppInputStyles.inputDecoration("Autor"),
@@ -232,7 +168,7 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
               ),
               const SizedBox(height: 15),
 
-              // Campo opcional para URL de portada personalizada.
+              // URL de portada (opcional)
               TextField(
                 controller: _coverUrlController,
                 decoration: AppInputStyles.inputDecoration(
@@ -243,7 +179,7 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
               ),
               const SizedBox(height: 20),
 
-              // Selector de estantería con lógica automática de progreso.
+              // Selector de estantería
               DropdownButtonFormField<String>(
                 initialValue: _estanteriaSeleccionada,
                 decoration: AppInputStyles.inputDecoration('Estantería'),
@@ -253,7 +189,6 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                 onChanged: (val) {
                   setState(() {
                     _estanteriaSeleccionada = val!;
-                    // Auto-ajuste de progreso según estantería seleccionada.
                     if (_estanteriaSeleccionada == 'Leído') {
                       _progresoController.text = "100";
                       _paginaActualController.text =
@@ -262,23 +197,21 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                     if (_estanteriaSeleccionada == 'Por leer') {
                       _progresoController.text = "0";
                       _paginaActualController.text = "";
+                      _tiempoActualController?.clear();
+                      _tiempoTotalController?.clear();
+                      _formKey.currentState?.reset();
                     }
                     if (_estanteriaSeleccionada == 'Leyendo') {
-                      // Ajustar según formato
-                      if (_formatoLibro == 'Digital') {
-                        _progresoController.text = "1";
-                      } else {
-                        _paginaActualController.text = "1";
-                      }
+                      _inicializarValoresPorDefecto();
                     }
                   });
                 },
               ),
               const SizedBox(height: 20),
 
-              // Campos condicionales si el libro está en estado 'Leyendo'.
+              // Campos condicionales si está en 'Leyendo'
               if (_estanteriaSeleccionada == 'Leyendo') ...[
-                // Selector de formato: Papel o Digital.
+                // Selector de formato: Papel, Digital o Audio
                 SegmentedButton<String>(
                   segments: const [
                     ButtonSegment(
@@ -291,19 +224,36 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                       label: Text('Digital'),
                       icon: Icon(Icons.tablet_android),
                     ),
+                    ButtonSegment(
+                      value: 'Audio',
+                      label: Text('Audio'),
+                      icon: Icon(Icons.headphones),
+                    ),
                   ],
                   selected: {_formatoLibro},
                   onSelectionChanged: (Set<String> newSelection) {
                     setState(() {
                       _formatoLibro = newSelection.first;
-                      // Si está en 'Leyendo', ajustar campo según nuevo formato
                       if (_estanteriaSeleccionada == 'Leyendo') {
                         if (_formatoLibro == 'Digital') {
                           _progresoController.text = "1";
                           _paginaActualController.clear();
-                        } else {
+                          _tiempoTotalController?.clear();
+                          _tiempoActualController?.clear();
+                        } else if (_formatoLibro == 'Papel') {
                           _paginaActualController.text = "1";
                           _progresoController.text = "0";
+                          _tiempoTotalController?.clear();
+                          _tiempoActualController?.clear();
+                        } else if (_formatoLibro == 'Audio') {
+                          _paginaActualController.clear();
+                          _progresoController.clear();
+                          _tiempoTotalController ??= TextEditingController(
+                            text: "00:00:00",
+                          );
+                          _tiempoActualController ??= TextEditingController(
+                            text: "00:00",
+                          );
                         }
                       }
                     });
@@ -315,39 +265,38 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                 ),
                 const SizedBox(height: 15),
 
-                // Inputs específicos según formato seleccionado.
+                // ─────────────────────────────────────────────────
+                // INPUTS SEGÚN FORMATO SELECCIONADO
+                // ─────────────────────────────────────────────────
+
+                // CASO 1: Formato Papel → campos de páginas
                 if (_formatoLibro == 'Papel') ...[
                   Row(
                     children: [
-                      // Página actual: validada contra el total de páginas.
                       Expanded(
                         child: buildNumberField(
                           label: 'Pág. Actual',
                           controller: _paginaActualController,
                           maxPages: int.tryParse(
                             _paginasTotalesController.text,
-                          ), // Validación dinámica.
-                          onChanged: (_) {
-                            setState(() {}); // Refresca UI si es necesario.
-                          },
+                          ),
+                          onChanged: (_) => setState(() {}),
                         ),
                       ),
                       const SizedBox(width: 10),
-                      // Total de páginas: campo obligatorio para formato Papel.
                       Expanded(
                         child: buildNumberField(
                           label: 'Total Págs.',
                           controller: _paginasTotalesController,
-                          isTotalField: true, // Valida que sea > 0.
-                          onChanged: (_) {
-                            setState(() {});
-                          },
+                          isTotalField: true,
+                          onChanged: (_) => setState(() {}),
                         ),
                       ),
                     ],
                   ),
-                ] else ...[
-                  // Para formato Digital: input directo de porcentaje (0-100).
+                ]
+                // CASO 2: Formato Digital → SOLO campo de porcentaje (0-100)
+                else if (_formatoLibro == 'Digital') ...[
                   TextFormField(
                     controller: _progresoController,
                     keyboardType: TextInputType.number,
@@ -356,21 +305,109 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                     ).copyWith(suffixText: '%'),
                     validator: (v) {
                       final int? n = int.tryParse(v ?? '');
-                      if (n == null || n < 0 || n > 100) {
-                        return "0-100";
-                      }
+                      if (n == null || n < 0 || n > 100) return "0-100";
                       return null;
                     },
                   ),
+                ]
+                // CASO 3: Formato Audio → SOLO campos de tiempo (SIN porcentaje)
+                else if (_formatoLibro == 'Audio') ...[
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _tiempoActualController,
+                          keyboardType: TextInputType.datetime,
+                          decoration:
+                              AppInputStyles.inputDecoration(
+                                'Tiempo actual',
+                              ).copyWith(
+                                helperText: 'Ej: 30:45 o 1:20:15',
+                                helperStyle: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey[600],
+                                ),
+                                suffixText: '⏱️',
+                              ),
+                          validator: (v) {
+                            if (_estanteriaSeleccionada != 'Leyendo') return null;
+                            if (v == null || v.trim().isEmpty){
+                              return 'Requerido';
+                            }
+                            if (tiempoASegundos(v) == null){
+                              return 'Formato inválido (MM:SS)';
+                            }
+                            return null;
+                          },
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _tiempoTotalController,
+                          keyboardType: TextInputType.datetime,
+                          decoration:
+                              AppInputStyles.inputDecoration(
+                                'Tiempo total',
+                              ).copyWith(
+                                helperText: 'Duración completa',
+                                helperStyle: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey[600],
+                                ),
+                                suffixText: '⏱️',
+                              ),
+                          validator: (v) {
+                            if (_estanteriaSeleccionada != 'Leyendo') return null;
+                            if (v == null || v.trim().isEmpty){
+                              return 'Requerido';
+                            }
+                            final total = tiempoASegundos(v);
+                            if (total == null || total <= 0){
+                              return 'Debe ser > 0';
+                            }
+                            return null;
+                          },
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                    ],
+                  ),
+                  // Validación cruzada: tiempo actual <= tiempo total
+                  if (_tiempoActualController?.text.isNotEmpty == true &&
+                      _tiempoTotalController?.text.isNotEmpty == true)
+                    Builder(
+                      builder: (context) {
+                        final actual = tiempoASegundos(
+                          _tiempoActualController!.text,
+                        );
+                        final total = tiempoASegundos(
+                          _tiempoTotalController!.text,
+                        );
+                        if (actual != null && total != null && actual > total) {
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              '⚠️ El tiempo actual no puede superar el total',
+                              style: TextStyle(
+                                color: Colors.red.shade700,
+                                fontSize: 11,
+                              ),
+                            ),
+                          );
+                        }
+                        return const SizedBox.shrink();
+                      },
+                    ),
                 ],
               ],
 
-              // Selectores de fecha solo para libros en estado 'Leído'.
+              // Selectores de fecha solo para 'Leído'
               if (_estanteriaSeleccionada == 'Leído') ...[
                 const SizedBox(height: 20),
                 Row(
                   children: [
-                    // Fecha de inicio de lectura.
                     Expanded(
                       child: ListTile(
                         title: const Text(
@@ -391,15 +428,12 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                             firstDate: DateTime(2000),
                             lastDate: DateTime.now(),
                           );
-                          if (picked != null) {
-                            setState(() {
-                              _fechaInicio = picked;
-                            });
+                          if (picked != null){
+                            setState(() => _fechaInicio = picked);
                           }
                         },
                       ),
                     ),
-                    // Fecha de finalización de lectura.
                     Expanded(
                       child: ListTile(
                         title: const Text(
@@ -417,14 +451,11 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                           final DateTime? picked = await showDatePicker(
                             context: context,
                             initialDate: _fechaFin,
-                            firstDate:
-                                _fechaInicio, // No puede ser anterior al inicio.
+                            firstDate: _fechaInicio,
                             lastDate: DateTime.now(),
                           );
-                          if (picked != null) {
-                            setState(() {
-                              _fechaFin = picked;
-                            });
+                          if (picked != null){
+                            setState(() => _fechaFin = picked);
                           }
                         },
                       ),
@@ -434,7 +465,7 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
               ],
               const SizedBox(height: 30),
 
-              // Botones de acción: Cancelar o Agregar.
+              // Botones de acción
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
@@ -445,8 +476,7 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                   const SizedBox(width: 10),
                   ElevatedButton(
                     style: AppButtonStyles.primaryElevatedButton,
-                    onPressed:
-                        _enviarDatos, // Valida y devuelve datos al padre.
+                    onPressed: _enviarDatos,
                     child: const Text('Agregar'),
                   ),
                 ],
@@ -462,13 +492,6 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
   // HELPERS DE UI Y BÚSQUEDA
   // ─────────────────────────────────────────────────────────────
 
-  /// Limpia todos los campos del formulario y reinicia variables de estado.
-  ///
-  /// Acciones:
-  /// - Limpia todos los `TextEditingController`
-  /// - Reset `_progresoController` a "0"
-  /// - Invalida datos de catálogo global (`_bookIdGlobal`, `_isbnGlobal`, etc.)
-  /// - Llama a `setState` para reconstruir la UI con los valores por defecto
   void _limpiarFormulario() {
     setState(() {
       _tituloController.clear();
@@ -477,27 +500,18 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
       _paginaActualController.clear();
       _coverUrlController.clear();
       _progresoController.text = "0";
-      // Reiniciar datos de catálogo global.
+      _tiempoActualController?.clear();
+      _tiempoTotalController?.clear();
       _bookIdGlobal = null;
       _isbnGlobal = null;
       _sinopsisGlobal = null;
       _generoGlobal = null;
+      _estanteriaSeleccionada = 'Leyendo';
+      _formatoLibro = 'Papel';
+      _inicializarValoresPorDefecto();
     });
   }
 
-  /// Abre el diálogo de búsqueda híbrida y rellena el formulario con los resultados.
-  ///
-  /// Flujo:
-  /// 1. Llama a `mostrarDialogoBusquedaLibros(context)` que devuelve `Map<String, dynamic>?`
-  /// 2. Si el usuario selecciona un libro y el widget sigue montado:
-  ///    - Actualiza `_tituloController`, `_autorController`, `_coverUrlController`
-  ///    - Guarda `_bookIdGlobal` para marcar el libro como "verificado"
-  ///    - Guarda `_isbnGlobal`, `_sinopsisGlobal`, `_generoGlobal` para enviar a `DatabaseService`
-  ///    - Si hay `pages` en los datos, pre-llena `_paginasTotalesController`
-  /// 3. Normaliza `_generoGlobal`: si viene vacío, usa `'Sin género'`
-  ///
-  /// Nota: Los campos de título y autor quedan editables; si el usuario los modifica,
-  /// `_bookIdGlobal` se invalida automáticamente en el `onChanged` del campo título.
   void _mostrarBusquedaLibros() async {
     final resultado = await mostrarDialogoBusquedaLibros(context);
     if (resultado != null && mounted) {
@@ -508,12 +522,8 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
         _bookIdGlobal = resultado['bookId'];
         _isbnGlobal = resultado['isbn'] ?? '';
         _sinopsisGlobal = resultado['sinopsis'] ?? '';
-
-        // Normalización de género: si viene vacío, usar valor por defecto.
         final String generoRaw = resultado['genre'] ?? '';
         _generoGlobal = generoRaw.isEmpty ? 'Sin género' : generoRaw;
-
-        // Si hay páginas en los datos, prellenar el campo total.
         if (resultado['pages'] != null && resultado['pages'] > 0) {
           _paginasTotalesController.text = resultado['pages'].toString();
         }
@@ -525,67 +535,51 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
   // LÓGICA DE NEGOCIO: VALIDACIÓN Y RETORNO DE DATOS
   // ─────────────────────────────────────────────────────────────
 
-  /// Valida el formulario, calcula el progreso final y devuelve los datos al widget padre.
-  ///
-  /// Flujo detallado:
-  /// 1. Valida el formulario con `_formKey.currentState!.validate()`
-  /// 2. Parsea `paginasTotales` y `paginaActual` con fallback a 0 si falla el parseo
-  /// 3. Calcula `progresoFinal` según estantería y formato:
-  ///    - `'Leído'`: progreso = 100, `paginaActual` = `paginasTotales`
-  ///    - `'Leyendo'` + `'Papel'`: progreso = `((paginaActual / paginasTotales) * 100).round()`
-  ///    - `'Leyendo'` + `'Digital'`: progreso = valor ingresado directamente (0-100)
-  ///    - `'Por leer'`: progreso = 0 (valor por defecto)
-  /// 4. Devuelve `Map<String, dynamic>` con todos los datos vía `Navigator.pop`
-  ///
-  /// Estructura del mapa de retorno:
-  /// ```dart
-  /// {
-  ///   'titulo': String,           // Título trimmeado
-  ///   'autor': String,            // Autor trimmeado
-  ///   'estanteria': String,       // Valor seleccionado
-  ///   'progreso': int,            // Calculado según lógica anterior
-  ///   'fechaInicio': DateTime?,   // Solo si estantería == 'Leído'
-  ///   'fechaFin': DateTime?,      // Solo si estantería == 'Leído'
-  ///   'formato': String,          // 'Papel' | 'Digital'
-  ///   'paginasTotales': int,      // 0 si es Digital o no se ingresó
-  ///   'paginaActual': int,        // 0 si es Digital o no 'Leyendo'
-  ///   'cover': String,            // URL trimmeada (puede ser vacío)
-  ///   'isbn': String,             // Del catálogo o vacío
-  ///   'sinopsis': String,         // Del catálogo o vacío
-  ///   'genero': String,           // Normalizado a 'Sin género' si vacío
-  /// }
-  /// ```
-  ///
-  /// Nota: Este método no muestra `SnackBar` de error; delega la validación visual
-  /// a los `TextFormField.validator` que ya muestran mensajes en rojo automáticamente.
   void _enviarDatos() {
-    // 1. Validación estándar del Form (campos vacíos, formatos, etc.).
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
+    if (!_formKey.currentState!.validate()) return;
 
     final int paginasTotales =
         int.tryParse(_paginasTotalesController.text) ?? 0;
-    // Quitar 'final' porque se reasigna más abajo si estantería == 'Leído'
     int paginaActual = int.tryParse(_paginaActualController.text) ?? 0;
     int progresoFinal = 0;
 
-    // Cálculo de progreso según estantería y formato.
-    if (_estanteriaSeleccionada == 'Leído') {
-      progresoFinal = 100;
-      paginaActual = paginasTotales; // Ahora sí permite reasignación
-    } else if (_estanteriaSeleccionada == 'Leyendo') {
-      if (_formatoLibro == 'Papel' && paginasTotales > 0) {
-        // Para Papel: calcular porcentaje basado en páginas.
-        progresoFinal = ((paginaActual / paginasTotales) * 100).round();
-      } else {
-        // Para Digital: usar el porcentaje ingresado directamente.
-        progresoFinal = int.tryParse(_progresoController.text) ?? 0;
+    // Variables para Audio
+    int? totalSeconds, currentSeconds;
+    if (_formatoLibro == 'Audio' && _estanteriaSeleccionada == 'Leyendo') {
+      totalSeconds = tiempoASegundos(_tiempoTotalController?.text ?? '');
+      currentSeconds = tiempoASegundos(_tiempoActualController?.text ?? '');
+
+      if (totalSeconds == null ||
+          currentSeconds == null ||
+          currentSeconds > totalSeconds ||
+          totalSeconds <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Verifica los tiempos del audiolibro')),
+        );
+        return;
       }
     }
-    // Para 'Por leer', progresoFinal permanece en 0 (valor por defecto).
 
-    // Devolver mapa completo con todos los datos necesarios para DatabaseService.
+    // Cálculo de progreso según formato
+    if (_estanteriaSeleccionada == 'Leído') {
+      progresoFinal = 100;
+      paginaActual = paginasTotales;
+    } else if (_estanteriaSeleccionada == 'Leyendo') {
+      if (_formatoLibro == 'Papel' && paginasTotales > 0) {
+        progresoFinal = ((paginaActual / paginasTotales) * 100).round();
+      } else if (_formatoLibro == 'Digital') {
+        progresoFinal = int.tryParse(_progresoController.text) ?? 0;
+      } else if (_formatoLibro == 'Audio' &&
+          totalSeconds != null &&
+          currentSeconds != null) {
+        progresoFinal = ((currentSeconds / totalSeconds) * 100).round().clamp(
+          0,
+          100,
+        );
+      }
+    }
+    // 'Por leer' → progresoFinal = 0 (por defecto)
+
     Navigator.pop(context, {
       'titulo': _tituloController.text.trim(),
       'autor': _autorController.text.trim(),
@@ -596,6 +590,8 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
       'formato': _formatoLibro,
       'paginasTotales': paginasTotales,
       'paginaActual': paginaActual,
+      'totalSeconds': totalSeconds, // ← NUEVO: para Audio
+      'currentSeconds': currentSeconds, // ← NUEVO: para Audio
       'cover': _coverUrlController.text.trim(),
       'isbn': _isbnGlobal ?? '',
       'sinopsis': _sinopsisGlobal ?? '',
