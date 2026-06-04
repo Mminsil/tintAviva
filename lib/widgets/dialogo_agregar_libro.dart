@@ -193,15 +193,15 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                       _progresoController.text = "100";
                       _paginaActualController.text =
                           _paginasTotalesController.text;
-                    }
-                    if (_estanteriaSeleccionada == 'Por leer') {
+                    } else if (_estanteriaSeleccionada == 'Por leer') {
                       _progresoController.text = "0";
                       _paginaActualController.text = "";
                       _tiempoActualController?.clear();
                       _tiempoTotalController?.clear();
-                      _formKey.currentState?.reset();
-                    }
-                    if (_estanteriaSeleccionada == 'Leyendo') {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        _formKey.currentState?.validate();
+                      });
+                    } else if (_estanteriaSeleccionada == 'Leyendo') {
                       _inicializarValoresPorDefecto();
                     }
                   });
@@ -330,11 +330,13 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                                 suffixText: '⏱️',
                               ),
                           validator: (v) {
-                            if (_estanteriaSeleccionada != 'Leyendo') return null;
-                            if (v == null || v.trim().isEmpty){
+                            if (_estanteriaSeleccionada != 'Leyendo'){
+                              return null;
+                            }
+                            if (v == null || v.trim().isEmpty) {
                               return 'Requerido';
                             }
-                            if (tiempoASegundos(v) == null){
+                            if (tiempoASegundos(v) == null) {
                               return 'Formato inválido (MM:SS)';
                             }
                             return null;
@@ -359,12 +361,14 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                                 suffixText: '⏱️',
                               ),
                           validator: (v) {
-                            if (_estanteriaSeleccionada != 'Leyendo') return null;
-                            if (v == null || v.trim().isEmpty){
+                            if (_estanteriaSeleccionada != 'Leyendo'){
+                              return null;
+                            }
+                            if (v == null || v.trim().isEmpty) {
                               return 'Requerido';
                             }
                             final total = tiempoASegundos(v);
-                            if (total == null || total <= 0){
+                            if (total == null || total <= 0) {
                               return 'Debe ser > 0';
                             }
                             return null;
@@ -428,7 +432,7 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                             firstDate: DateTime(2000),
                             lastDate: DateTime.now(),
                           );
-                          if (picked != null){
+                          if (picked != null) {
                             setState(() => _fechaInicio = picked);
                           }
                         },
@@ -454,7 +458,7 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                             firstDate: _fechaInicio,
                             lastDate: DateTime.now(),
                           );
-                          if (picked != null){
+                          if (picked != null) {
                             setState(() => _fechaFin = picked);
                           }
                         },

@@ -5,8 +5,6 @@ import 'package:tintaviva/utils/dialogos_helpers.dart';
 import 'package:tintaviva/utils/ui_helpers.dart';
 import 'package:tintaviva/widgets/app_book_cover.dart';
 
-
-
 /// Tarjeta reutilizable para mostrar un libro con su progreso y opciones de edición rápida.
 ///
 /// Soporta tres formatos:
@@ -157,16 +155,40 @@ class TarjetaLibroProgreso extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        libroData['title'] ?? 'Sin título',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      // 👇 NUEVO: Row que contiene icono + título en la misma línea
+                      Row(
+                        children: [
+                          // Icono de formato
+                          Tooltip(
+                            message: _formatoTooltip(libroData['format']),
+                            waitDuration: const Duration(milliseconds: 400),
+                            child: Icon(
+                              _formatoIcono(libroData['format']),
+                              size: 16,
+                              color: _formatoColor(
+                                libroData['format'],
+                              ).withValues(alpha: 0.6),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+
+                          // Título con Flexible (dentro del Row, funciona perfecto)
+                          Flexible(
+                            child: Text(
+                              libroData['title'] ?? 'Sin título',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ], // ← Cierra children del Row
+                      ), // ← Cierra Row
                       const SizedBox(height: 4),
+
+                      // Autor (fuera del Row, normal)
                       Text(
                         libroData['author'] ?? 'Autor desconocido',
                         style: const TextStyle(
@@ -178,7 +200,7 @@ class TarjetaLibroProgreso extends StatelessWidget {
                       ),
                       const SizedBox(height: 12),
 
-                      // Barra de progreso adaptativa (Papel/Digital/Audio)
+                      // Barra de progreso...
                       WidgetBarraProgreso(
                         progress: libroData['progress'] ?? 0,
                         currentPage: libroData['currentPage'] ?? 0,
@@ -213,6 +235,42 @@ class TarjetaLibroProgreso extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+IconData _formatoIcono(String? formato) {
+  switch (formato) {
+    case 'Audio':
+      return Icons.headphones;
+    case 'Digital':
+      return Icons.tablet_android;
+    case 'Papel':
+    default:
+      return Icons.menu_book;
+  }
+}
+
+Color _formatoColor(String? formato) {
+  switch (formato) {
+    case 'Audio':
+      return AppColors.morado;
+    case 'Digital':
+      return Colors.blueAccent;
+    case 'Papel':
+    default:
+      return AppColors.naranja;
+  }
+}
+
+String _formatoTooltip(String? formato) {
+  switch (formato) {
+    case 'Audio':
+      return 'Audiolibro';
+    case 'Digital':
+      return 'Libro digital';
+    case 'Papel':
+    default:
+      return 'Libro físico';
   }
 }
 
