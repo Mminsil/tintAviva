@@ -103,6 +103,7 @@ class _EditarLibroPageState extends State<EditarLibroPage>
     _tituloController = TextEditingController(
       text: widget.datosActuales['title'] ?? "",
     );
+    
   }
 
   @override
@@ -409,7 +410,7 @@ class _EditarLibroPageState extends State<EditarLibroPage>
     );
   }
 
-  /// ✅ CORREGIDO: Ahora maneja los 3 formatos correctamente
+  /// Ahora maneja los 3 formatos correctamente
   Widget _buildPaginasControls() {
     if (_formatoSeleccionado == 'Papel') {
       return Row(
@@ -434,7 +435,7 @@ class _EditarLibroPageState extends State<EditarLibroPage>
         ],
       );
     }
-    // ✅ Para Digital: muestra total de páginas como texto (no editable)
+    // Para Digital: muestra total de páginas como texto (no editable)
     else if (_formatoSeleccionado == 'Digital') {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
@@ -604,28 +605,58 @@ class _EditarLibroPageState extends State<EditarLibroPage>
 
   void _onEstanteriaChanged(String? newValue) async {
     if (newValue == null || newValue == _estanteria) return;
+
     final String oldShelf = _estanteria;
     final int currentProgress = _progreso.toInt();
     final int totalPages =
         int.tryParse(_paginasTotalesController.text.trim()) ?? 0;
-    final int currentPage =
-        int.tryParse(_paginaActualController.text.trim()) ?? 0;
+    final int? totalSec = tiempoASegundos(_tiempoTotalController.text);
 
     bool confirmar = true;
     String mensaje = "", titulo = "";
 
+    // ─────────────────────────────────────────────────────────────
+    // VALIDACIÓN ESPECIAL: Cambiar a Audio sin tiempo total definido
+    // ─────────────────────────────────────────────────────────────
+    if (newValue == 'Leyendo' && _formatoSeleccionado == 'Audio') {
+      if (totalSec == null || totalSec <= 0) {
+        confirmar = await _mostrarDialogoIngresarTiempoTotal();
+        if (!confirmar || !mounted){
+          return; // Usuario canceló → no cambiar estantería
+        }
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Mensajes de confirmación según el cambio de estantería
+    // ─────────────────────────────────────────────────────────────
     if (oldShelf == 'Leyendo' &&
         (newValue == 'Leído' || newValue == 'Por leer')) {
-      titulo = "¿Perder progreso?";
-      mensaje =
-          "El libro está al $currentProgress%. Si cambias a '$newValue', el progreso se actualizará (${newValue == 'Leído' ? '100%' : '0%'}). ¿Continuar?";
+      titulo = "¿Actualizar progreso?";
+      if (newValue == 'Leído') {
+        mensaje =
+            "El libro está al $currentProgress%. Al marcar como 'Leído', el progreso se actualizará al 100%. ¿Continuar?";
+      } else {
+        mensaje =
+            "El libro está al $currentProgress%. Si cambias a 'Por leer', el progreso se reiniciará a 0%. ¿Continuar?";
+      }
     } else if (oldShelf == 'Leído' &&
         (newValue == 'Leyendo' || newValue == 'Por leer')) {
       titulo = "¿Volver a leer?";
+      if (newValue == 'Leyendo') {
+        mensaje =
+            "Ya marcaste este libro como 'Leído'. Al cambiar a 'Leyendo', recuperaremos tu progreso anterior. ¿Seguro?";
+      } else {
+        mensaje =
+            "Ya marcaste este libro como 'Leído'. Al cambiar a 'Por leer', reiniciaremos el progreso a 0%. ¿Seguro?";
+      }
+    } else if (oldShelf == 'Por leer' && newValue == 'Leído') {
+      titulo = "¿Marcar como leído?";
       mensaje =
-          "Ya marcaste este libro como 'Leído'. Al cambiar a '$newValue', reiniciaremos el progreso a 0%. ¿Seguro?";
+          "El libro está en 'Por leer'. Al marcar como 'Leído', el progreso se actualizará al 100%. ¿Continuar?";
     }
 
+    // Mostrar diálogo de confirmación si es necesario
     if ((oldShelf == 'Leyendo' || oldShelf == 'Leído') &&
         newValue != oldShelf) {
       confirmar =
@@ -657,42 +688,84 @@ class _EditarLibroPageState extends State<EditarLibroPage>
           ) ??
           false;
     }
-    if (!confirmar) return;
 
+    if (!confirmar || !mounted) return;
+
+    // ─────────────────────────────────────────────────────────────
+    // ACTUALIZAR ESTADO Y CONTROLLERS SEGÚN NUEVA ESTANTERÍA
+    // ─────────────────────────────────────────────────────────────
     setState(() {
       _estanteria = newValue;
+
       if (newValue == 'Leído') {
+        // PROGRESO 100% + ACTUALIZAR CAMPOS SEGÚN FORMATO
         _progreso = 100.0;
-        _paginaActualController.text = totalPages > 0
-            ? totalPages.toString()
-            : "0";
-        _paginaActualGuardada = currentPage;
+
+        if (_formatoSeleccionado == 'Papel' && totalPages > 0) {
+          _paginaActualController.text = totalPages.toString();
+        } else if (_formatoSeleccionado == 'Audio' && totalSec != null) {
+          // 🎧 AUDIO: tiempo actual = tiempo total + ACTUALIZAR INPUT
+          _tiempoActualController.text = segundosATiempo(totalSec);
+        }
+        // Digital: no hace falta cambiar nada, el progreso 100% ya lo dice todo
       } else if (newValue == 'Por leer') {
+        // PROGRESO 0% + RESETEAR CAMPOS SEGÚN FORMATO
         _progreso = 0.0;
-        _paginaActualController.text = "1";
-        _paginaActualGuardada = currentPage;
+
+        if (_formatoSeleccionado == 'Papel') {
+          _paginaActualController.text = "1";
+        } else if (_formatoSeleccionado == 'Audio') {
+          // 🎧 AUDIO: resetear tiempo actual a 00:00 + ACTUALIZAR INPUT
+          _tiempoActualController.text = "00:00";
+        }
+        // Digital: no hace falta cambiar nada, el progreso 0% ya lo dice todo
       } else if (newValue == 'Leyendo') {
-        if (_paginaActualGuardada != null && _paginaActualGuardada! > 0) {
-          _paginaActualController.text = (_paginaActualGuardada == totalPages)
-              ? "0"
-              : _paginaActualGuardada.toString();
-          final paginaParaCalculo =
-              int.tryParse(_paginaActualController.text.trim()) ?? 0;
-          if (totalPages > 0) {
-            _progreso = ((paginaParaCalculo / totalPages) * 100).clamp(
-              0.0,
-              100.0,
+        // RESTAURAR PROGRESO ANTERIOR CUANDO SE VUELVE A "LEYENDO"
+        if (oldShelf == 'Leído') {
+          // Restaurar valores guardados al editar
+          if (_formatoSeleccionado == 'Papel' &&
+              _paginaActualGuardada != null) {
+            _paginaActualController.text = _paginaActualGuardada.toString();
+            if (totalPages > 0) {
+              _progreso = ((_paginaActualGuardada! / totalPages) * 100).clamp(
+                0.0,
+                100.0,
+              );
+            }
+          } else if (_formatoSeleccionado == 'Audio' &&
+              _currentSecondsGuardado != null) {
+            _tiempoActualController.text = segundosATiempo(
+              _currentSecondsGuardado!,
             );
+            if (totalSec != null && totalSec > 0) {
+              _progreso = ((_currentSecondsGuardado! / totalSec) * 100).clamp(
+                0.0,
+                100.0,
+              );
+            }
+          } else if (_formatoSeleccionado == 'Digital') {
+            // Restaurar progreso digital desde los datos originales
+            _progreso = (widget.datosActuales['progress'] ?? 0).toDouble();
           }
         } else {
-          final actual = int.tryParse(_paginaActualController.text.trim()) ?? 0;
-          if (totalPages > 0) {
+          // Cálculo normal cuando viene de "Por leer"
+          if (_formatoSeleccionado == 'Papel' && totalPages > 0) {
+            final actual =
+                int.tryParse(_paginaActualController.text.trim()) ?? 0;
             _progreso = ((actual / totalPages) * 100).clamp(0.0, 100.0);
+          } else if (_formatoSeleccionado == 'Audio') {
+            final actual = tiempoASegundos(_tiempoActualController.text);
+            if (totalSec != null && totalSec > 0 && actual != null) {
+              _progreso = ((actual / totalSec) * 100).clamp(0.0, 100.0);
+            }
           }
         }
       }
     });
 
+    // ─────────────────────────────────────────────────────────────
+    // FEEDBACK VISUAL AL USUARIO
+    // ─────────────────────────────────────────────────────────────
     if (mounted) {
       if (oldShelf == 'Por leer' && newValue == 'Leyendo') {
         mostrarSnackBar(
@@ -706,13 +779,99 @@ class _EditarLibroPageState extends State<EditarLibroPage>
           "📖 ¿Te gustó '${widget.datosActuales['title']}'? Crea un club y comparte con tus amigos.",
           AppColors.naranja,
         );
+      } else if (newValue == 'Por leer') {
+        mostrarSnackBar(
+          context,
+          "📚 Libro movido a 'Por leer'. El progreso se ha reiniciado.",
+          AppColors.naranja,
+        );
       }
     }
   }
 
-  void _onFormatoChanged(Set<String> newSelection) {
+  /// Muestra un diálogo para ingresar la duración total del audiolibro.
+  Future<bool> _mostrarDialogoIngresarTiempoTotal() async {
+    final TextEditingController tiempoController = TextEditingController();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Ingrese duración total"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              "Para cambiar a formato Audio, necesitas indicar la duración total del libro.",
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: tiempoController,
+              decoration: AppInputStyles.inputDecoration("Duración total")
+                  .copyWith(
+                    helperText: "Ej: 10:30:00 o 2:15:30",
+                    suffixText: "⏱️",
+                  ),
+              keyboardType: TextInputType.datetime,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancelar"),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final tiempo = tiempoASegundos(tiempoController.text);
+              if (tiempo != null && tiempo > 0) {
+                setState(() {
+                  _tiempoTotalController.text = segundosATiempo(tiempo);
+                });
+                Navigator.pop(context, true);
+              } else {
+                mostrarSnackBar(
+                  context,
+                  "Formato inválido. Usa MM:SS o HH:MM:SS",
+                  Colors.red,
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.naranja),
+            child: const Text("Guardar", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    tiempoController.dispose();
+    return result ?? false;
+  }
+
+ Future<void> _onFormatoChanged(Set<String> newSelection) async {
     final nuevoFormato = newSelection.first;
+
     if (nuevoFormato == _formatoSeleccionado) return;
+
+    // Validaciín: Si cambia a Audio sin duración total, pedirla antes de cambiar el formato
+    if (nuevoFormato == 'Audio') {
+    final totalSec = tiempoASegundos(_tiempoTotalController.text);
+    
+    // Si no hay tiempo total válido, pedirlo al usuario
+    if (totalSec == null || totalSec <= 0) {
+      // ignore: unnecessary_nullable_for_final_variable_declarations
+      final bool? confirmado = await _mostrarDialogoIngresarTiempoTotal();
+      
+      // Si canceló o no está montado, NO cambiar de formato
+      if (confirmado != true || !mounted) return;
+      
+      // Si confirmó, recalcular totalSec con el nuevo valor
+      if (totalSec == null || totalSec <= 0) {
+        // Releer el valor actualizado después del diálogo
+        final nuevoTotal = tiempoASegundos(_tiempoTotalController.text);
+        if (nuevoTotal == null || nuevoTotal <= 0) return;
+      }
+    }
+  }
 
     setState(() {
       final totales = int.tryParse(_paginasTotalesController.text.trim()) ?? 0;
@@ -737,7 +896,11 @@ class _EditarLibroPageState extends State<EditarLibroPage>
           _tiempoActualController.text = segundosATiempo(
             ((_progreso / 100) * totalSec).round(),
           );
-        }
+        }else {
+        // Si por algún motivo no hay total, poner 00:00
+        _tiempoActualController.text = "00:00";
+        _tiempoTotalController.text = "00:00:00";
+      }
       }
       _formatoSeleccionado = nuevoFormato;
     });

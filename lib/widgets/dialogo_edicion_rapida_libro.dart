@@ -243,7 +243,7 @@ class _DialogoEdicionState extends State<DialogoEdicionRapida> {
 
     _verificarYMostrarConfetti(porcentajeCalculado, paginaInput: valorInput);
 
-    Future.delayed(const Duration(milliseconds: 300), () {
+    Future.delayed(const Duration(milliseconds: 1500), () {
       if (mounted && context.mounted) {
         navigator.pop({
           'pagina': valorInput,
@@ -271,7 +271,7 @@ class _DialogoEdicionState extends State<DialogoEdicionRapida> {
 
     _verificarYMostrarConfetti(valorInput);
 
-    Future.delayed(const Duration(milliseconds: 300), () {
+    Future.delayed(const Duration(milliseconds: 1500), () {
       if (mounted && context.mounted) {
         navigator.pop({
           'pagina': null,

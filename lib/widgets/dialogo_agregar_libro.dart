@@ -330,7 +330,7 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                                 suffixText: '⏱️',
                               ),
                           validator: (v) {
-                            if (_estanteriaSeleccionada != 'Leyendo'){
+                            if (_estanteriaSeleccionada != 'Leyendo') {
                               return null;
                             }
                             if (v == null || v.trim().isEmpty) {
@@ -361,7 +361,7 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
                                 suffixText: '⏱️',
                               ),
                           validator: (v) {
-                            if (_estanteriaSeleccionada != 'Leyendo'){
+                            if (_estanteriaSeleccionada != 'Leyendo') {
                               return null;
                             }
                             if (v == null || v.trim().isEmpty) {
@@ -549,25 +549,63 @@ class _DialogoAgregarLibroState extends State<DialogoAgregarLibro> {
 
     // Variables para Audio
     int? totalSeconds, currentSeconds;
-    if (_formatoLibro == 'Audio' && _estanteriaSeleccionada == 'Leyendo') {
-      totalSeconds = tiempoASegundos(_tiempoTotalController?.text ?? '');
-      currentSeconds = tiempoASegundos(_tiempoActualController?.text ?? '');
 
-      if (totalSeconds == null ||
-          currentSeconds == null ||
-          currentSeconds > totalSeconds ||
-          totalSeconds <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Verifica los tiempos del audiolibro')),
-        );
-        return;
+    if (_formatoLibro == 'Audio') {
+      // ─────────────────────────────────────────────────────────────
+      // CASO 1: "Por leer" → No validar tiempos, dejar en null
+      // ─────────────────────────────────────────────────────────────
+      if (_estanteriaSeleccionada == 'Por leer') {
+        totalSeconds = null;
+        currentSeconds = null;
+      }
+      // ─────────────────────────────────────────────────────────────
+      // CASO 2: "Leído" → Tiempo actual = Tiempo total (si es válido)
+      // ─────────────────────────────────────────────────────────────
+      else if (_estanteriaSeleccionada == 'Leído') {
+        totalSeconds = tiempoASegundos(_tiempoTotalController?.text ?? '');
+
+        if (totalSeconds != null && totalSeconds > 0) {
+          currentSeconds = totalSeconds; // ✅ Completado = duración total
+        } else {
+          // Si no hay tiempo total válido, mostrar error
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Ingresa la duración total del audiolibro'),
+            ),
+          );
+          return;
+        }
+      }
+      // ─────────────────────────────────────────────────────────────
+      // CASO 3: "Leyendo" → Validar ambos tiempos como siempre
+      // ─────────────────────────────────────────────────────────────
+      else if (_estanteriaSeleccionada == 'Leyendo') {
+        totalSeconds = tiempoASegundos(_tiempoTotalController?.text ?? '');
+        currentSeconds = tiempoASegundos(_tiempoActualController?.text ?? '');
+
+        if (totalSeconds == null ||
+            currentSeconds == null ||
+            currentSeconds > totalSeconds ||
+            totalSeconds <= 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Verifica los tiempos del audiolibro'),
+            ),
+          );
+          return;
+        }
       }
     }
 
     // Cálculo de progreso según formato
     if (_estanteriaSeleccionada == 'Leído') {
       progresoFinal = 100;
-      paginaActual = paginasTotales;
+      if (_formatoLibro == 'Papel' && paginasTotales > 0) {
+        paginaActual = paginasTotales;
+      } else if (_formatoLibro == 'Audio' && totalSeconds != null) {
+        currentSeconds = totalSeconds;
+      }
+      // En Digital no hace falta cambiar nada, el progreso 100% ya lo dice todo
     } else if (_estanteriaSeleccionada == 'Leyendo') {
       if (_formatoLibro == 'Papel' && paginasTotales > 0) {
         progresoFinal = ((paginaActual / paginasTotales) * 100).round();

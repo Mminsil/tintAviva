@@ -155,7 +155,7 @@ class TarjetaLibroProgreso extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // 👇 NUEVO: Row que contiene icono + título en la misma línea
+                      // Row que contiene icono + título en la misma línea
                       Row(
                         children: [
                           // Icono de formato
@@ -172,7 +172,7 @@ class TarjetaLibroProgreso extends StatelessWidget {
                           ),
                           const SizedBox(width: 8),
 
-                          // Título con Flexible (dentro del Row, funciona perfecto)
+                          // Título con Flexible 
                           Flexible(
                             child: Text(
                               libroData['title'] ?? 'Sin título',
