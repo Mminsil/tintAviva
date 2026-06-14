@@ -6,6 +6,7 @@ import 'package:tintaviva/services/database.dart';
 import 'package:tintaviva/theme/app_styles.dart';
 import 'package:tintaviva/utils/input_validadores.dart';
 import 'package:tintaviva/utils/ui_helpers.dart';
+import 'package:intl/intl.dart';
 
 // ============================================================================
 // CLASE PRINCIPAL
@@ -48,6 +49,9 @@ class _EditarLibroPageState extends State<EditarLibroPage>
   late ConfettiController _confettiController;
   int? _paginaActualGuardada;
   int? _currentSecondsGuardado;
+  DateTime? _fechaInicio;
+  DateTime? _fechaFin;
+  bool _sinopsisEraVacia = false;
 
   @override
   void initState() {
@@ -103,7 +107,16 @@ class _EditarLibroPageState extends State<EditarLibroPage>
     _tituloController = TextEditingController(
       text: widget.datosActuales['title'] ?? "",
     );
-    
+
+    _fechaInicio = (widget.datosActuales['dateStarted'] as Timestamp?)
+        ?.toDate();
+    _fechaFin =
+        (widget.datosActuales['dateFinished'] as Timestamp?)?.toDate() ??
+        DateTime.now();
+
+    _sinopsisEraVacia =
+        widget.datosActuales['synopsis'] == null ||
+        widget.datosActuales['synopsis'].toString().trim().isEmpty;
   }
 
   @override
@@ -159,7 +172,6 @@ class _EditarLibroPageState extends State<EditarLibroPage>
           const SizedBox(height: 10),
           _buildTituloInput(),
           const SizedBox(height: 20),
-          _buildSectionTitle("Detalles del Libro"),
           _buildSectionTitle("Estado y Progreso"),
           const SizedBox(height: 10),
           _buildEstadoYProgresoCard(),
@@ -171,7 +183,8 @@ class _EditarLibroPageState extends State<EditarLibroPage>
           _buildSectionTitle("Notas"),
           const SizedBox(height: 10),
           _buildNotasCard(),
-          const SizedBox(height: 80),
+          const SizedBox(height: 20),
+          _buildFechasCard(),
         ],
       ),
     );
@@ -213,7 +226,7 @@ class _EditarLibroPageState extends State<EditarLibroPage>
             const SizedBox(height: 20),
             _buildProgresoControl(),
             const SizedBox(height: 20),
-            _buildPaginasControls(), // ← Aquí estaba el problema
+            _buildPaginasControls(),
             const SizedBox(height: 20),
             _buildPuntuacionSelector(),
           ],
@@ -500,6 +513,21 @@ class _EditarLibroPageState extends State<EditarLibroPage>
             if (_bookCoverController.text.isNotEmpty) _buildBookCoverPreview(),
             const SizedBox(height: 15),
             _buildTextField("Género", _generoController),
+            if (_sinopsisEraVacia) ...[
+              const SizedBox(height: 15),
+              _buildTextField(
+                "Sinopsis (será visible para todas las usuarias) ⚠️",
+                _sinopsisController,
+                lines: 4,
+              ),
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  "Esta sinopsis se guardará en el catálogo global.",
+                  style: TextStyle(fontSize: 11, color: Colors.orange[700]),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -603,6 +631,60 @@ class _EditarLibroPageState extends State<EditarLibroPage>
     );
   }
 
+  Widget _buildFechasCard() {
+    if (_estanteria != 'Leído') return const SizedBox.shrink();
+
+    return Card(
+      color: AppColors.blanco,
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            _buildDateTile(
+              'Fecha de inicio',
+              _fechaInicio,
+              (val) => setState(() => _fechaInicio = val),
+            ),
+            const Divider(height: 20),
+            _buildDateTile(
+              'Fecha de finalización',
+              _fechaFin,
+              (val) => setState(() => _fechaFin = val),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDateTile(
+    String label,
+    DateTime? date,
+    ValueChanged<DateTime> onPick,
+  ) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
+      subtitle: Text(
+        date != null
+            ? DateFormat('dd/MM/yyyy').format(date)
+            : 'No seleccionada',
+      ),
+      trailing: const Icon(Icons.calendar_today, color: AppColors.morado),
+      onTap: () async {
+        final picked = await showDatePicker(
+          context: context,
+          initialDate: date ?? DateTime.now(),
+          firstDate: DateTime(2000),
+          lastDate: DateTime.now(),
+        );
+        if (picked != null) onPick(picked);
+      },
+    );
+  }
+
   void _onEstanteriaChanged(String? newValue) async {
     if (newValue == null || newValue == _estanteria) return;
 
@@ -621,7 +703,7 @@ class _EditarLibroPageState extends State<EditarLibroPage>
     if (newValue == 'Leyendo' && _formatoSeleccionado == 'Audio') {
       if (totalSec == null || totalSec <= 0) {
         confirmar = await _mostrarDialogoIngresarTiempoTotal();
-        if (!confirmar || !mounted){
+        if (!confirmar || !mounted) {
           return; // Usuario canceló → no cambiar estantería
         }
       }
@@ -709,13 +791,15 @@ class _EditarLibroPageState extends State<EditarLibroPage>
         }
         // Digital: no hace falta cambiar nada, el progreso 100% ya lo dice todo
       } else if (newValue == 'Por leer') {
-        // PROGRESO 0% + RESETEAR CAMPOS SEGÚN FORMATO
         _progreso = 0.0;
+        _paginaActualController.text = "0";
+        _tiempoActualController.text = "00:00";
+        _paginaActualGuardada = 0;
+        _currentSecondsGuardado = 0;
 
         if (_formatoSeleccionado == 'Papel') {
           _paginaActualController.text = "1";
         } else if (_formatoSeleccionado == 'Audio') {
-          // 🎧 AUDIO: resetear tiempo actual a 00:00 + ACTUALIZAR INPUT
           _tiempoActualController.text = "00:00";
         }
         // Digital: no hace falta cambiar nada, el progreso 0% ya lo dice todo
@@ -847,29 +931,86 @@ class _EditarLibroPageState extends State<EditarLibroPage>
     return result ?? false;
   }
 
- Future<void> _onFormatoChanged(Set<String> newSelection) async {
+  /// Muestra un diálogo para ingresar el total de páginas al cambiar a formato Papel.
+Future<bool> _mostrarDialogoIngresarTotalPaginas() async {
+  final TextEditingController paginasController = TextEditingController();
+
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text("Ingrese total de páginas"),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text("Para cambiar a formato Papel, necesitas indicar el total de páginas."),
+          const SizedBox(height: 16),
+          TextField(
+            controller: paginasController,
+            decoration: AppInputStyles.inputDecoration("Total de páginas")
+                .copyWith(helperText: "Ej: 350", suffixText: "📖"),
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text("Cancelar"),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            final paginas = int.tryParse(paginasController.text);
+            if (paginas != null && paginas > 0) {
+              setState(() => _paginasTotalesController.text = paginas.toString());
+              Navigator.pop(context, true);
+            } else {
+              mostrarSnackBar(context, "Ingresa un número válido mayor a 0", Colors.red);
+            }
+          },
+          style: ElevatedButton.styleFrom(backgroundColor: AppColors.naranja),
+          child: const Text("Guardar", style: TextStyle(color: Colors.white)),
+        ),
+      ],
+    ),
+  );
+
+  paginasController.dispose();
+  return result ?? false;
+}
+
+  Future<void> _onFormatoChanged(Set<String> newSelection) async {
     final nuevoFormato = newSelection.first;
 
     if (nuevoFormato == _formatoSeleccionado) return;
 
     // Validaciín: Si cambia a Audio sin duración total, pedirla antes de cambiar el formato
     if (nuevoFormato == 'Audio') {
-    final totalSec = tiempoASegundos(_tiempoTotalController.text);
-    
-    // Si no hay tiempo total válido, pedirlo al usuario
-    if (totalSec == null || totalSec <= 0) {
-      // ignore: unnecessary_nullable_for_final_variable_declarations
-      final bool? confirmado = await _mostrarDialogoIngresarTiempoTotal();
-      
-      // Si canceló o no está montado, NO cambiar de formato
-      if (confirmado != true || !mounted) return;
-      
-      // Si confirmó, recalcular totalSec con el nuevo valor
+      final totalSec = tiempoASegundos(_tiempoTotalController.text);
+
+      // Si no hay tiempo total válido, pedirlo al usuario
       if (totalSec == null || totalSec <= 0) {
-        // Releer el valor actualizado después del diálogo
-        final nuevoTotal = tiempoASegundos(_tiempoTotalController.text);
-        if (nuevoTotal == null || nuevoTotal <= 0) return;
+        // ignore: unnecessary_nullable_for_final_variable_declarations
+        final bool? confirmado = await _mostrarDialogoIngresarTiempoTotal();
+
+        // Si canceló o no está montado, NO cambiar de formato
+        if (confirmado != true || !mounted) return;
+
+        // Si confirmó, recalcular totalSec con el nuevo valor
+        if (totalSec == null || totalSec <= 0) {
+          // Releer el valor actualizado después del diálogo
+          final nuevoTotal = tiempoASegundos(_tiempoTotalController.text);
+          if (nuevoTotal == null || nuevoTotal <= 0) return;
+        }
       }
+    }
+
+     if (nuevoFormato == 'Papel') {
+    final totales = int.tryParse(_paginasTotalesController.text.trim()) ?? 0;
+    if (totales <= 0) {
+      // ignore: unnecessary_nullable_for_final_variable_declarations
+      final bool? confirmado = await _mostrarDialogoIngresarTotalPaginas();
+      if (confirmado != true || !mounted) return;
     }
   }
 
@@ -896,11 +1037,11 @@ class _EditarLibroPageState extends State<EditarLibroPage>
           _tiempoActualController.text = segundosATiempo(
             ((_progreso / 100) * totalSec).round(),
           );
-        }else {
-        // Si por algún motivo no hay total, poner 00:00
-        _tiempoActualController.text = "00:00";
-        _tiempoTotalController.text = "00:00:00";
-      }
+        } else {
+          // Si por algún motivo no hay total, poner 00:00
+          _tiempoActualController.text = "00:00";
+          _tiempoTotalController.text = "00:00:00";
+        }
       }
       _formatoSeleccionado = nuevoFormato;
     });
@@ -1042,17 +1183,25 @@ class _EditarLibroPageState extends State<EditarLibroPage>
         'progress': progresoFinal,
         'rating': _puntuacion,
         'notes': _notasController.text,
+        'genre': _generoController.text.trim(),
         'totalPages': formato == 'Papel' ? totales : 0,
         'currentPage': formato == 'Papel' ? actual : 0,
         'format': formato,
-        'dateFinished': _estanteria == 'Leído'
-            ? FieldValue.serverTimestamp()
+        'dateStarted': _fechaInicio != null
+            ? Timestamp.fromDate(_fechaInicio!)
+            : null,
+        'dateFinished': _fechaFin != null
+            ? Timestamp.fromDate(_fechaFin!)
             : null,
         'bookCover': _bookCoverController.text.trim(),
         'totalSeconds': formato == 'Audio' ? totalSeconds : null,
         'currentSeconds': formato == 'Audio' ? currentSeconds : null,
       };
-      Map<String, dynamic> datosCatalogo = {'genre': _generoController.text};
+
+      Map<String, dynamic> datosCatalogo = {};
+      if (_sinopsisEraVacia && _sinopsisController.text.trim().isNotEmpty) {
+        datosCatalogo['synopsis'] = _sinopsisController.text.trim();
+      }
 
       await DatabaseService.editarLibroYStats(
         userBookId: widget.userBookId,

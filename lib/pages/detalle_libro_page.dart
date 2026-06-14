@@ -33,7 +33,7 @@ class _DetalleLibroPageState extends State<DetalleLibroPage> {
   bool _mostrarTodasCitas = false;
 
   // ─────────────────────────────────────────────────────────────
-  // BUILD PRINCIPAL 
+  // BUILD PRINCIPAL
   // ─────────────────────────────────────────────────────────────
 
   @override
@@ -119,18 +119,28 @@ class _DetalleLibroPageState extends State<DetalleLibroPage> {
   ) {
     final String title =
         userBookData['title'] ?? bookData['title'] ?? "Sin título";
+
     final String author =
         userBookData['author'] ?? bookData['author'] ?? "Autor desconocido";
-    final int totalPages =
-        (userBookData['totalPages'] ?? bookData['pages'] ?? 0).toInt();
+
+    final int? userPages = userBookData['totalPages'];
+    final int totalPages = (userPages == null || userPages == 0)
+        ? (bookData['pages'] ?? 0).toInt()
+        : userPages.toInt();
+
     final double rating = (userBookData['rating'] ?? 0.0).toDouble();
-    final String genre = _sanitizeField(bookData['genre'], "Sin género");
+
+    final String genre =
+        userBookData['genre'] ?? bookData['genre'] ?? "Género no especificado";
+
     final String synopsis = _sanitizeField(
       bookData['synopsis'],
       "Sin sinopsis disponible.",
     );
     final String notas = userBookData['notes'] ?? "";
+
     final String shelf = userBookData['shelf'] ?? "Por leer";
+    
     final List<String> personajesList = _extractStringList(
       userBookData['characters'],
     );

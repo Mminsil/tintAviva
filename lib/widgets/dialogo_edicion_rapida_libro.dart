@@ -52,14 +52,14 @@ class _DialogoEdicionState extends State<DialogoEdicionRapida> {
   void initState() {
     super.initState();
 
-    // ✅ CORREGIDO: Inicializar el valor según el formato
+    // Inicializar el valor según el formato
     String valorInicial;
 
     if (widget.formato == 'Papel') {
       // Para Papel: mostrar página actual
       valorInicial = widget.paginaActual.toString();
     } else if (widget.formato == 'Audio' && widget.currentSeconds != null) {
-      // ✅ Para Audio: convertir segundos a tiempo legible (MM:SS o HH:MM:SS)
+      // Para Audio: convertir segundos a tiempo legible (MM:SS o HH:MM:SS)
       valorInicial = segundosATiempo(widget.currentSeconds!);
     } else {
       // Para Digital: mostrar porcentaje
@@ -284,7 +284,7 @@ class _DialogoEdicionState extends State<DialogoEdicionRapida> {
 
   /// Lógica específica para formato Audio.
   void _guardarAudio(NavigatorState navigator, String texto) {
-    // ✅ Usar las funciones de ui_helpers.dart
+    // Usar las funciones de ui_helpers.dart
     final int? segundosActuales = tiempoASegundos(texto);
     final int? totalSeg = widget.totalSeconds;
 
